@@ -332,9 +332,12 @@ class ShellCommand(object):
     def zfs_recv_snapshot(self, root_path: str, source_dataset: str, snapshot: str, target: str,
                           remote: SshHost = None) -> None:
 
-        # create datasets under root path
+        # create datasets under root path, without the last part of the dataset path.
+        # the last part is created by zfs recv.
+        # otherwise, when an encrypted dataset is received, the unencrypted dataset would be overwritten by an
+        # encrypted dataset, which is forbidden by zfs.
         re_joined_parts = root_path
-        for dataset in Path(source_dataset).parts:
+        for dataset in Path(source_dataset).parts[:-1]:
             re_joined_parts = os.path.join(re_joined_parts, dataset)
             if not self.has_dataset(re_joined_parts):
                 self._execute('zfs create "{}"'.format(re_joined_parts), capture_output=False)
