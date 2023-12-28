@@ -662,6 +662,9 @@ class ZfsBackupTool(object):
                 selected_datasets.extend(((d, source) for d in selected_source_datasets))
         # endregion
 
+        # sort selected datasets by name
+        selected_datasets = sorted(selected_datasets, key=lambda x: x[0])
+
         # region iter all selected datasets and perform backup
         for source_dataset, source in selected_datasets:
             source_dataset_snapshots = self.shell_command.get_snapshots(source_dataset)
