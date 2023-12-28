@@ -891,7 +891,7 @@ class ZfsBackupTool(object):
                 backup_sources.append(BackupSource(section,
                                                    sources,
                                                    [target_groups[t] for t in targets],
-                                                   parser.getboolean(section, 'recursive'),
+                                                   parser.getboolean(section, 'recursive', fallback=False),
                                                    self._itemize_option(parser.get(section, 'exclude', fallback=None)),
                                                    self._itemize_option(parser.get(section, 'include', fallback=None)),
                                                    ))
