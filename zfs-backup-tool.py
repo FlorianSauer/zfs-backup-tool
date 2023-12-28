@@ -13,7 +13,7 @@ from typing import List, Set, Optional, Tuple, Dict
 
 # region constants
 INITIAL_SNAPSHOT_POSTFIX = "initial"
-SNAPSHOT_PREFIX_POSTFIX_SEPARATOR = "_"
+SNAPSHOT_PREFIX_POSTFIX_SEPARATOR = "."
 INITIALIZED_FILE_NAME = ".initialized"
 TARGET_SUBDIRECTORY = "zfs"
 BACKUP_FILE_POSTFIX = ".zfs"
@@ -100,6 +100,7 @@ class CommandExecutionError(Exception):
 
 
 class ShellCommand(object):
+    _PV_DEFAULT_OPTIONS = "--force --rate --average-rate --bytes --timer --eta"
     def __init__(self, echo_cmd=False):
         self.echo_cmd = echo_cmd
 
@@ -250,7 +251,7 @@ class ShellCommand(object):
                 command = 'zfs send --raw {}@{}'.format(source_dataset, next_snapshot)
 
             command += ' | tee >( sha256sum -b > "{}" )'.format(tmp.name)
-            command += ' | pv --force --rate --average-rate --bytes --timer --eta --size {}'.format(estimated_size)
+            command += ' | pv {} --size {}'.format(self._PV_DEFAULT_OPTIONS, estimated_size)
 
             if remote:
                 command += ' | ' + self._get_ssh_command(remote)
@@ -271,14 +272,18 @@ class ShellCommand(object):
                       source_dataset: str, next_snapshot: str, target_path: str, remote: SshHost = None) -> None:
         if remote:
             command = self._get_ssh_command(remote)
-            checksum_command = 'pv --force --rate --average-rate --bytes --timer --name "{}" --cursor "{}"'.format(
-                target_path, os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
+            checksum_command = 'pv {} --name "{}" --cursor "{}"'.format(
+                self._PV_DEFAULT_OPTIONS,
+                target_path,
+                os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
                                           next_snapshot + BACKUP_FILE_POSTFIX))
             checksum_command += ' | sha256sum -b'
             command += shlex.quote(checksum_command)
         else:
-            command = 'pv --force --rate --average-rate --bytes --timer --name "{}" --cursor "{}"'.format(
-                target_path, os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
+            command = 'pv {} --name "{}" --cursor "{}"'.format(
+                self._PV_DEFAULT_OPTIONS,
+                target_path,
+                os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
                                           next_snapshot + BACKUP_FILE_POSTFIX))
             command += ' | sha256sum -b'
         sub_process = self._execute(command, capture_output=True, capture_stderr=False
@@ -359,9 +364,9 @@ class ShellCommand(object):
         if remote:
             command = self._get_ssh_command(remote)
             command += shlex.quote(
-                'pv --force --rate --average-rate --bytes --timer "{}"'.format(backup_path))
+                'pv {} "{}"'.format(self._PV_DEFAULT_OPTIONS, backup_path))
         else:
-            command = 'pv --force --rate --average-rate --bytes --timer "{}"'.format(backup_path)
+            command = 'pv {} "{}"'.format(self._PV_DEFAULT_OPTIONS, backup_path)
         command += ' | zfs recv -F "{}"'.format(os.path.join(root_path, source_dataset))
 
         self._execute(command, capture_output=False)
