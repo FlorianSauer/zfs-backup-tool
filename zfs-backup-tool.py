@@ -581,6 +581,7 @@ class ZfsBackupTool(object):
         for target_path in target_paths:
             self.shell_command.mkdir(os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset),
                                      self.config.remote)
+        print("Transmitting backup to target(s): {}...".format(", ".join(sorted(target_paths))))
         backup_checksum = self.shell_command.zfs_send_snapshot(
             source_dataset, previous_snapshot, next_snapshot, target_paths,
             self.config.remote, self.config.include_intermediate_snapshots)
