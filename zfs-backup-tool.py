@@ -522,18 +522,21 @@ class ZfsBackupTool(object):
             targets = [target for target in targets if target.name.startswith(self.cli_args.target_filter)]
         return targets
 
+    def _sort_backup_snapshots(self, snapshots: List[str]) -> List[str]:
+        ordered_snapshots: List[str] = []
+        for snapshot in sorted(snapshots):
+            if snapshot.endswith(INITIAL_SNAPSHOT_POSTFIX):
+                ordered_snapshots.insert(0, snapshot)
+            else:
+                ordered_snapshots.append(snapshot)
+        return ordered_snapshots
+
     def _filter_backup_snapshots(self, snapshots: List[str], sort=True) -> List[str]:
         matching_snapshots = [snapshot for snapshot in snapshots
                               if snapshot.startswith(self.config.snapshot_prefix)]
 
         if sort:
-            ordered_snapshots: List[str] = []
-            for snapshot in sorted(matching_snapshots):
-                if snapshot.endswith(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR + INITIAL_SNAPSHOT_POSTFIX):
-                    ordered_snapshots.insert(0, snapshot)
-                else:
-                    ordered_snapshots.append(snapshot)
-            return ordered_snapshots
+            return self._sort_backup_snapshots(matching_snapshots)
         else:
             return matching_snapshots
 
@@ -726,8 +729,7 @@ class ZfsBackupTool(object):
                 grouped_snapshots[source_dataset] = []
             grouped_snapshots[source_dataset].append(snapshot)
         for source_dataset in grouped_snapshots:
-            grouped_snapshots[source_dataset] = self._filter_backup_snapshots(
-                grouped_snapshots[source_dataset], sort=True)
+            grouped_snapshots[source_dataset] = self._sort_backup_snapshots(grouped_snapshots[source_dataset])
         return grouped_snapshots
 
     def _do_restore_into_target(self, source_dataset: str, snapshots: List[str], root_path: str, targets: Set[str]):
@@ -815,7 +817,11 @@ class ZfsBackupTool(object):
             for dataset in sorted(grouped_snapshots.keys()):
                 if self.cli_args.filter and self.cli_args.filter not in dataset:
                     continue
-                self._do_restore_into_target(dataset, grouped_snapshots[dataset],
+                matching_snapshots = self._filter_backup_snapshots(grouped_snapshots[dataset], sort=True)
+                if not matching_snapshots:
+                    print("No matching snapshots found for dataset {}".format(dataset))
+                    continue
+                self._do_restore_into_target(dataset, matching_snapshots,
                                              self.cli_args.restore, self.config.get_all_target_paths())
         else:
             for source in self.config.sources:
@@ -826,7 +832,11 @@ class ZfsBackupTool(object):
                     else:
                         if dataset not in source.zfs_source:
                             continue
-                    self._do_restore_into_target(dataset, grouped_snapshots[dataset],
+                    matching_snapshots = self._filter_backup_snapshots(grouped_snapshots[dataset], sort=True)
+                    if not matching_snapshots:
+                        print("No matching snapshots found for dataset {}".format(dataset))
+                        continue
+                    self._do_restore_into_target(dataset, matching_snapshots,
                                                  self.cli_args.restore, source.get_all_target_paths())
 
     def _itemize_option(self, option_content: Optional[str]) -> List[str]:
