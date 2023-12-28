@@ -101,6 +101,7 @@ class CommandExecutionError(Exception):
 
 class ShellCommand(object):
     _PV_DEFAULT_OPTIONS = "--force --rate --average-rate --bytes --timer --eta"
+
     def __init__(self, echo_cmd=False):
         self.echo_cmd = echo_cmd
 
@@ -276,7 +277,7 @@ class ShellCommand(object):
                 self._PV_DEFAULT_OPTIONS,
                 target_path,
                 os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
-                                          next_snapshot + BACKUP_FILE_POSTFIX))
+                             next_snapshot + BACKUP_FILE_POSTFIX))
             checksum_command += ' | sha256sum -b'
             command += shlex.quote(checksum_command)
         else:
@@ -284,7 +285,7 @@ class ShellCommand(object):
                 self._PV_DEFAULT_OPTIONS,
                 target_path,
                 os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
-                                          next_snapshot + BACKUP_FILE_POSTFIX))
+                             next_snapshot + BACKUP_FILE_POSTFIX))
             command += ' | sha256sum -b'
         sub_process = self._execute(command, capture_output=True, capture_stderr=False
                                     )
@@ -393,8 +394,11 @@ class ZfsBackupTool(object):
     backup_parser.add_argument('--clean', action='store_true',
                                help='Removes all backup snapshots. Does not create new backup.')
     backup_parser.add_argument('--missing', action='store_true',
-                               help='Re-create backup only for missing snapshots. '
-                                    'Skips creation of a new incremental backup')
+                               help='Re-create backups only for missing snapshots. '
+                                    'Skips creation of a new incremental backup.')
+    backup_parser.add_argument('--skip-repaired-datasets', action='store_true',
+                               help='Will not create new backup snapshots on a dataset if the incremental base was '
+                                    'missing and re-created on any target.')
     backup_parser.add_argument('--target-filter',
                                help='Perform backup only to targets starting with given filter.')
     restore_parser = subparsers.add_parser('restore', help='Perform restore into given root path.',
@@ -616,6 +620,7 @@ class ZfsBackupTool(object):
 
     def _do_recreate_missing_backups(self, source_dataset: str, source_dataset_snapshots: List[str],
                                      target_paths: Set[str]):
+        recreated_snapshots = set()
         sorted_existing_backup_snapshots = self._filter_backup_snapshots(source_dataset_snapshots, sort=True)
         for i, snapshot in enumerate(sorted_existing_backup_snapshots):
             incpmlete_targets = set()
@@ -645,6 +650,7 @@ class ZfsBackupTool(object):
                 print("Recreating missing backup {}@{} on target(s) {}".format(source_dataset, snapshot,
                                                                                ", ".join(incpmlete_targets)))
                 self._do_backup(incpmlete_targets, source_dataset, previous_snapshot, next_snapshot)
+                recreated_snapshots.add(snapshot)
             else:
                 print("Backup {}@{} is complete on all targets".format(source_dataset, snapshot))
 
@@ -684,11 +690,15 @@ class ZfsBackupTool(object):
                     continue
                 source_dataset_snapshots = self.shell_command.get_snapshots(source_dataset)
 
-            # recreate missing/aborted backup snapshots
-            self._do_recreate_missing_backups(source_dataset, source_dataset_snapshots,
-                                              source.get_all_target_paths(self.cli_args.target_filter))
             if self.cli_args.missing:
+                # recreate missing/aborted backup snapshots, then exit
+                recreated = self._do_recreate_missing_backups(source_dataset, source_dataset_snapshots,
+                                                              source.get_all_target_paths(self.cli_args.target_filter))
                 continue
+            else:
+                # recreate missing/aborted backup snapshots, then create a new incremental backup
+                recreated = self._do_recreate_missing_backups(source_dataset, source_dataset_snapshots,
+                                                              source.get_all_target_paths(self.cli_args.target_filter))
 
             # detect previous and next snapshot
             if (not self._has_initial_backup_snapshot(source_dataset_snapshots)
@@ -708,6 +718,11 @@ class ZfsBackupTool(object):
                     print("Aborting...")
                     sys.exit(1)
                 previous_snapshot, next_snapshot = self._get_next_snapshot_name(source_dataset_snapshots)
+
+            if previous_snapshot in recreated and self.cli_args.skip_repaired_datasets:
+                print("Skipping creation of new incremental backup for {}@{} because it was re-created on a "
+                      "target".format(source_dataset, next_snapshot))
+                continue
 
             # create new snapshot and perform backup
             print("Creating snapshot {}@{}...".format(source_dataset, next_snapshot))
@@ -863,7 +878,7 @@ class ZfsBackupTool(object):
                                            )
         if os.path.isdir(path):
             for root, dirs, files in os.walk(path):
-                for file in files:
+                for file in sorted(files):
                     parser.read(os.path.join(root, file))
         else:
             parser.read(path)
