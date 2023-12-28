@@ -853,7 +853,12 @@ class ZfsBackupTool(object):
         parser = configparser.ConfigParser(interpolation=EnvInterpolation(),
                                            converters={'list': lambda x: [i.strip() for i in x.split(',')]}
                                            )
-        parser.read(path)
+        if os.path.isdir(path):
+            for root, dirs, files in os.walk(path):
+                for file in files:
+                    parser.read(os.path.join(root, file))
+        else:
+            parser.read(path)
         # parse optional remote section
         remote = None
         for section in parser.sections():
