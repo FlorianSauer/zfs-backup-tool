@@ -722,7 +722,7 @@ class ZfsBackupTool(object):
 
             if previous_snapshot in recreated and self.cli_args.skip_repaired_datasets:
                 print("Skipping creation of new incremental backup for {} because snapshots were re-created on a "
-                      "target".format(source_dataset, next_snapshot))
+                      "target".format(source_dataset))
                 continue
 
             # create new snapshot and perform backup
