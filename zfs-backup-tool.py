@@ -370,7 +370,7 @@ class ShellCommand(object):
 class ZfsBackupTool(object):
     # region argparse setup
     cli_parser = argparse.ArgumentParser(description='ZFS Backup Tool')
-    cli_parser.add_argument('-c', '--config', type=str, required=True, help='Path to config file')
+    cli_parser.add_argument('config', type=str, required=True, help='Path to config file')
     cli_parser.add_argument('--debug', action='store_true', help='Debug output')
     cli_parser.add_argument('--version', action='version', version='%(prog)s 0.1')
     cli_parser.add_argument('-y', '--yes', action='store_true', help='Answer yes to all questions')
