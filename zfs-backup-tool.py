@@ -396,7 +396,7 @@ class ZfsBackupTool(object):
     backup_parser.add_argument('--missing', action='store_true',
                                help='Re-create backups only for missing snapshots. '
                                     'Skips creation of a new incremental backup.')
-    backup_parser.add_argument('--skip-repaired-datasets', action='store_true',
+    backup_parser.add_argument('--skip-repaired-datasets', action='store_true', dest='skip_repaired_datasets',
                                help='Will not create new backup snapshots on a dataset if the incremental base was '
                                     'missing and re-created on any target.')
     backup_parser.add_argument('--target-filter',
