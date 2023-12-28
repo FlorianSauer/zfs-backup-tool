@@ -1,81 +1,18 @@
 import argparse
 import configparser
 import os.path
-import shlex
-import subprocess
 import sys
-import tempfile
-import threading
-import time
 from os.path import expandvars
-from pathlib import Path
 from typing import List, Set, Optional, Tuple, Dict
 
-# region constants
-INITIAL_SNAPSHOT_POSTFIX = "initial"
-SNAPSHOT_PREFIX_POSTFIX_SEPARATOR = "."
-INITIALIZED_FILE_NAME = ".initialized"
-TARGET_SUBDIRECTORY = "zfs"
-BACKUP_FILE_POSTFIX = ".zfs"
-CHECKSUM_FILE_POSTFIX = ".sha256"
+from ZfsBackupTool.BackupSetup import BackupSetup
+from ZfsBackupTool.BackupSource import BackupSource
+from ZfsBackupTool.Constants import *
+from ZfsBackupTool.DataSet import DataSet
+from ZfsBackupTool.ShellCommand import ShellCommand, CommandExecutionError
+from ZfsBackupTool.SshHost import SshHost
+from ZfsBackupTool.TargetGroup import TargetGroup
 
-
-# endregion
-
-# region setup config classes
-class SshHost(object):
-    def __init__(self, host: str, user: str = None, port: int = None, key_path: str = None):
-        self.host = host
-        self.user = user
-        self.port = port
-        self.key_path = key_path
-
-
-class TargetGroup(object):
-    def __init__(self, paths: List[str], name: str):
-        self.paths = paths
-        self.name = name
-
-
-class BackupSource(object):
-    def __init__(self, name: str, zfs_source: List[str], targets: List[TargetGroup],
-                 recursive: bool = False,
-                 exclude: List[str] = None,
-                 include: List[str] = None):
-        self.name = name
-        self.zfs_source = zfs_source
-        self.targets = targets
-        self.recursive = recursive
-        self.exclude = exclude
-        self.include = include
-
-    def get_all_target_paths(self, target_filter: Optional[str] = None) -> Set[str]:
-        paths = []
-        for target in self.targets:
-            for target_path in target.paths:
-                if target_filter and not target_path.startswith(target_filter):
-                    continue
-                paths.append(target_path)
-        return set(paths)
-
-
-class BackupSetup(object):
-    def __init__(self, sources: List[BackupSource], remote: SshHost = None, snapshot_prefix: str = None,
-                 include_intermediate_snapshots: bool = False):
-        self.sources = sources
-        self.remote = remote
-        self.snapshot_prefix = snapshot_prefix or "backup-snapshot"
-        self.include_intermediate_snapshots = include_intermediate_snapshots
-
-    def get_all_target_paths(self) -> Set[str]:
-        paths = []
-        for source in self.sources:
-            for target in source.targets:
-                paths.extend(target.paths)
-        return set(paths)
-
-
-# endregion
 
 # region setup helper class for environment expanding in config file
 class EnvInterpolation(configparser.BasicInterpolation):
@@ -87,290 +24,6 @@ class EnvInterpolation(configparser.BasicInterpolation):
 
 
 # endregion
-
-# region helper class for command execution errors
-class CommandExecutionError(Exception):
-
-    def __init__(self, sub_process: subprocess.Popen, *args):
-        super().__init__(*args)
-        self.sub_process = sub_process
-
-
-# endregion
-
-
-class ShellCommand(object):
-    _PV_DEFAULT_OPTIONS = "--force --rate --average-rate --bytes --timer --eta"
-
-    def __init__(self, echo_cmd=False):
-        self.echo_cmd = echo_cmd
-
-    def _execute(self, command: str, capture_output: bool, capture_stdout=True, capture_stderr=True,
-                 dev_null_output=False) -> subprocess.Popen:
-        if capture_output and dev_null_output:
-            raise ValueError("capture_output and dev_null_output cannot be used together")
-        if self.echo_cmd:
-            print("$ {}".format(command))
-        if capture_output:
-            if capture_stdout:
-                stdout = subprocess.PIPE
-            else:
-                stdout = None
-            if capture_stderr:
-                stderr = subprocess.PIPE
-            else:
-                stderr = None
-            sub_process = subprocess.Popen(command, shell=True, stdout=stdout, stderr=stderr,
-                                           executable="/bin/bash")
-        elif dev_null_output:
-            sub_process = subprocess.Popen(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                           executable="/bin/bash")
-        else:
-            sub_process = subprocess.Popen(command, shell=True, executable="/bin/bash")
-        sub_process.wait()
-        if sub_process.returncode != 0:
-            if capture_output and capture_stderr:
-                stderr_data = sub_process.stderr.read().decode('utf-8') if sub_process.stderr else ""
-                raise CommandExecutionError(sub_process, "Error executing command > {} <\n{}".format(
-                    command, stderr_data))
-            raise CommandExecutionError(sub_process, "Error executing command > {} <".format(command))
-        return sub_process
-
-    def _get_ssh_command(self, remote: SshHost):
-        command = "ssh -o BatchMode=yes "
-        if remote.key_path:
-            command += '-i "{}"'.format(remote.key_path)
-        if remote.port:
-            command += "-p {}".format(remote.port)
-        if remote.user:
-            command += "{}@{} ".format(remote.user, remote.host)
-        else:
-            command += "{} ".format(remote.host)
-        return command
-
-    def mkdir(self, path: str, remote: SshHost = None):
-        if remote:
-            command = self._get_ssh_command(remote)
-            command += shlex.quote('mkdir -p "{}"'.format(path))
-        else:
-            command = 'mkdir -p "{}"'.format(path)
-        return self._execute(command, capture_output=False)
-
-    def write_to_file(self, path: str, content: str, remote: SshHost = None):
-        command = "echo '{}' | ".format(content)
-        if remote:
-            command += self._get_ssh_command(remote)
-            command += shlex.quote('cat - > "{}"'.format(path))
-        else:
-            command += 'cat - > "{}"'.format(path)
-        return self._execute(command, capture_output=False)
-
-    def get_datasets(self, config_source_dataset: str, recursive: bool) -> List[str]:
-        command = "zfs list -H -o name"
-        if recursive:
-            command += " -r"
-        command += ' "{}"'.format(config_source_dataset)
-        sub_process = self._execute(command, capture_output=True)
-        stdout_lines = sub_process.stdout.read().decode('utf-8').splitlines() if sub_process.stdout else []
-        return [line.strip() for line in stdout_lines]
-
-    def has_dataset(self, dataset: str) -> bool:
-        command = "zfs list -H -o name"
-        command += ' | grep -q -e "{}"'.format(dataset)
-        try:
-            sub_process = self._execute(command, capture_output=True)
-        except CommandExecutionError as e:
-            exit_code = e.sub_process.returncode
-        else:
-            exit_code = sub_process.returncode
-        return exit_code == 0
-
-    def program_is_installed(self, program: str, remote: SshHost = None):
-        if remote:
-            command = self._get_ssh_command(remote)
-            command += shlex.quote('which "{}"'.format(program))
-        else:
-            command = 'which "{}"'.format(program)
-
-        try:
-            self._execute(command, capture_output=True)
-        except CommandExecutionError as e:
-            print("Program '{}' not installed".format(program), file=sys.stderr)
-            stderr_data = e.sub_process.stderr.read().decode('utf-8') if e.sub_process.stderr else ""
-            print(stderr_data, file=sys.stderr)
-            sys.exit(1)
-
-    def create_snapshot(self, source_dataset: str, next_snapshot: str):
-        command = 'zfs snapshot "{}@{}"'.format(source_dataset, next_snapshot)
-        return self._execute(command, capture_output=False)
-
-    def get_snapshots(self, source_dataset: str) -> List[str]:
-        command = "zfs list -H -o name -t snapshot"
-        command += ' "{}"'.format(source_dataset)
-        sub_process = self._execute(command, capture_output=True)
-        stdout_lines = sub_process.stdout.read().decode('utf-8').splitlines() if sub_process.stdout else []
-        return [line.strip().replace(source_dataset + "@", "")
-                for line in stdout_lines]
-
-    def delete_snapshot(self, source_dataset: str, snapshot: str):
-        command = 'zfs destroy "{}@{}"'.format(source_dataset, snapshot)
-        return self._execute(command, capture_output=False)
-
-    def get_estimated_snapshot_size(self, source_dataset: str, previous_snapshot: Optional[str], next_snapshot: str,
-                                    include_intermediate_snapshots: bool = False):
-        if previous_snapshot:
-            sub_process = self._execute('zfs send -n -P --raw {} "{}@{}" "{}@{}"'.format(
-                "-I" if include_intermediate_snapshots else '-i',
-                source_dataset, previous_snapshot, source_dataset, next_snapshot), capture_output=True
-            )
-        else:
-            sub_process = self._execute('zfs send -n -P --raw "{}@{}"'.format(
-                source_dataset, next_snapshot), capture_output=True
-            )
-        stdout_lines = sub_process.stdout.read().decode('utf-8').splitlines() if sub_process.stdout else []
-
-        for line in stdout_lines:
-            if line.lower().startswith("size"):
-                return int(line.replace("size", "").strip())
-        raise ValueError("Could not determine snapshot size")
-
-    def zfs_send_snapshot(self, source_dataset: str, previous_snapshot: Optional[str], next_snapshot: str,
-                          target_paths: Set[str],
-                          remote: SshHost = None,
-                          include_intermediate_snapshots: bool = False) -> str:
-
-        estimated_size = self.get_estimated_snapshot_size(source_dataset, previous_snapshot, next_snapshot,
-                                                          include_intermediate_snapshots)
-
-        # with temporary file
-        with tempfile.NamedTemporaryFile() as tmp:
-            if previous_snapshot:
-                command = 'zfs send --raw {} "{}@{}" "{}@{}" '.format(
-                    "-I" if include_intermediate_snapshots else '-i',
-                    source_dataset, previous_snapshot, source_dataset, next_snapshot)
-            else:
-                command = 'zfs send --raw {}@{}'.format(source_dataset, next_snapshot)
-
-            command += ' | tee >( sha256sum -b > "{}" )'.format(tmp.name)
-            command += ' | pv {} --size {}'.format(self._PV_DEFAULT_OPTIONS, estimated_size)
-
-            if remote:
-                command += ' | ' + self._get_ssh_command(remote)
-                tee_quoted_paths = ' '.join('"{}"'.format(
-                    os.path.join(path, TARGET_SUBDIRECTORY, source_dataset, next_snapshot + BACKUP_FILE_POSTFIX))
-                                            for path in sorted(target_paths))
-                command += shlex.quote('tee {} > /dev/null'.format(tee_quoted_paths))
-            else:
-                tee_quoted_paths = ' '.join('"{}"'.format(
-                    os.path.join(path, TARGET_SUBDIRECTORY, source_dataset, next_snapshot + BACKUP_FILE_POSTFIX))
-                                            for path in sorted(target_paths))
-                command += ' | tee {} > /dev/null'.format(tee_quoted_paths)
-
-            self._execute(command, capture_output=False)
-            return tmp.read().decode('utf-8').strip().split(' ')[0]
-
-    def _get_checksum(self, output_dict: Dict[str, str], access_lock: threading.Lock,
-                      source_dataset: str, next_snapshot: str, target_path: str, remote: SshHost = None) -> None:
-        if remote:
-            command = self._get_ssh_command(remote)
-            checksum_command = 'pv {} --name "{}" --cursor "{}"'.format(
-                self._PV_DEFAULT_OPTIONS,
-                target_path,
-                os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
-                             next_snapshot + BACKUP_FILE_POSTFIX))
-            checksum_command += ' | sha256sum -b'
-            command += shlex.quote(checksum_command)
-        else:
-            command = 'pv {} --name "{}" --cursor "{}"'.format(
-                self._PV_DEFAULT_OPTIONS,
-                target_path,
-                os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
-                             next_snapshot + BACKUP_FILE_POSTFIX))
-            command += ' | sha256sum -b'
-        sub_process = self._execute(command, capture_output=True, capture_stderr=False
-                                    )
-        if not sub_process.stdout:
-            raise ValueError("Could not determine checksum")
-        checksum = sub_process.stdout.read().decode('utf-8').strip().split(' ')[0]
-        with access_lock:
-            output_dict[target_path] = checksum
-
-    def get_checksums(self, source_dataset: str, next_snapshot: str, target_paths: Set[str], remote: SshHost = None):
-        threads = []
-        output_dict: Dict[str, str] = {}
-        access_lock = threading.Lock()
-        for target_path in sorted(target_paths):
-            thread = threading.Thread(target=self._get_checksum, args=(output_dict, access_lock,
-                                                                       source_dataset, next_snapshot, target_path,
-                                                                       remote), daemon=True)
-            threads.append(thread)
-
-        for thread in threads:
-            thread.start()
-            time.sleep(1)
-        for thread in threads:
-            thread.join()
-
-        return output_dict
-
-    def file_exists(self, path: str, remote: SshHost = None):
-        if remote:
-            command = self._get_ssh_command(remote)
-            command += shlex.quote('test -f "{}"'.format(path))
-        else:
-            command = 'test -f "{}"'.format(path)
-        try:
-            sub_process = self._execute(command, capture_output=True)
-        except CommandExecutionError as e:
-            exit_code = e.sub_process.returncode
-        else:
-            exit_code = sub_process.returncode
-        return exit_code == 0
-
-    def list_directory(self, path: str, remote: SshHost = None) -> Tuple[List[str], List[str]]:
-        if remote:
-            command = self._get_ssh_command(remote)
-            command += shlex.quote('ls -AF "{}"'.format(path))
-        else:
-            command = 'ls -AF "{}"'.format(path)
-        sub_process = self._execute(command, capture_output=True)
-        if not sub_process.stdout:
-            raise ValueError("Could not list directory")
-        files: List[str] = []
-        directories: List[str] = []
-        for line in sub_process.stdout.read().decode('utf-8').splitlines():
-            line = line.strip()
-            if line.endswith('/'):  # directory
-                directories.append(line[:-1])
-            elif line.endswith('*'):  # executable
-                files.append(line[:-1])
-            elif line[-1] not in ['@', '%', '|', '=', '>']:  # not other special files
-                files.append(line)
-        return files, directories
-
-    def zfs_recv_snapshot(self, root_path: str, source_dataset: str, snapshot: str, target: str,
-                          remote: SshHost = None) -> None:
-
-        # create datasets under root path, without the last part of the dataset path.
-        # the last part is created by zfs recv.
-        # otherwise, when an encrypted dataset is received, the unencrypted dataset would be overwritten by an
-        # encrypted dataset, which is forbidden by zfs.
-        re_joined_parts = root_path
-        for dataset in Path(source_dataset).parts[:-1]:
-            re_joined_parts = os.path.join(re_joined_parts, dataset)
-            if not self.has_dataset(re_joined_parts):
-                self._execute('zfs create "{}"'.format(re_joined_parts), capture_output=False)
-
-        backup_path = os.path.join(target, TARGET_SUBDIRECTORY, source_dataset, snapshot + BACKUP_FILE_POSTFIX)
-        if remote:
-            command = self._get_ssh_command(remote)
-            command += shlex.quote(
-                'pv {} "{}"'.format(self._PV_DEFAULT_OPTIONS, backup_path))
-        else:
-            command = 'pv {} "{}"'.format(self._PV_DEFAULT_OPTIONS, backup_path)
-        command += ' | zfs recv -F "{}"'.format(os.path.join(root_path, source_dataset))
-
-        self._execute(command, capture_output=False)
 
 
 class ZfsBackupTool(object):
@@ -426,8 +79,8 @@ class ZfsBackupTool(object):
 
     def run(self):
         self.cli_args = self.cli_parser.parse_args(sys.argv[1:])
-        self.config = self._load_config(self.cli_args.config)
         self.shell_command = ShellCommand(echo_cmd=self.cli_args.debug)
+        self.config = self._load_config(self.cli_args.config)
         self.do_check_programs_installed()
         if self.cli_args.subparser_name is None:
             self.cli_parser.print_help()
@@ -656,80 +309,105 @@ class ZfsBackupTool(object):
         return recreated_snapshots
 
     def do_backup(self):
-        selected_datasets: List[Tuple[str, BackupSource]] = []
+
+        print("Checking source datasets...")
+
         # region check if all source datasets exist, are not selected twice and map them into selected_datasets
+        selected_datasets: Set[DataSet] = set()
         for source in self.config.sources:
-            for config_source_dataset in source.zfs_source:
-                if not self.shell_command.has_dataset(config_source_dataset):
+            # if not self.shell_command.has_dataset(config_source_dataset):
+            invalid_sources = source.invalid_zfs_sources()
+            if invalid_sources:
+                for invalid_source in invalid_sources:
                     print("Source dataset {} defined in '{}' does not exist".format(
-                        config_source_dataset, source.name))
+                        invalid_source, source.name))
                     print("Aborting...")
-                    exit(1)
-                selected_source_datasets = self.shell_command.get_datasets(config_source_dataset, source.recursive)
-                overlapping_datasets = set(d for d, _ in selected_datasets).intersection(set(selected_source_datasets))
-                if overlapping_datasets:
-                    print("Source dataset(s) {} defined in '{}' overlap with already selected datasets".format(
-                        ", ".join(overlapping_datasets), source.name))
-                    print("Aborting...")
-                    exit(1)
-                selected_datasets.extend(((d, source) for d in selected_source_datasets))
+                exit(1)
+            selected_source_datasets = source.get_matching_datasets()
+            overlapping_datasets = set(selected_datasets).intersection(set(selected_source_datasets))
+            if overlapping_datasets:
+                print("Source dataset(s) {} defined in '{}' overlap with already selected datasets".format(
+                    ", ".join(s.zfs_path for s in overlapping_datasets), source.name))
+                print("Aborting...")
+                exit(1)
+            selected_datasets.update(set(source.get_matching_datasets()))
         # endregion
 
-        # sort selected datasets by name
-        selected_datasets = sorted(selected_datasets, key=lambda x: x[0])
+        # region reset snapshots if requested
+        if self.cli_args.new or self.cli_args.clean:
+            for source in self.config.sources:
+                for dataset in source.get_matching_datasets():
+                    for snapshot in dataset.get_backup_snapshots(self.config.snapshot_prefix):
+                        print("Deleting snapshot {}@{}...".format(dataset.zfs_path, snapshot))
+                        dataset.delete_snapshot(snapshot)
+                    dataset.invalidate_caches()
+            if self.cli_args.clean:
+                # abort further processing if clean is requested
+                return
+        # endregion
 
-        # region iter all selected datasets and perform backup
-        for source_dataset, source in selected_datasets:
-            source_dataset_snapshots = self.shell_command.get_snapshots(source_dataset)
-            # reset snapshots if new backup is requested or clean is requested
-            if self.cli_args.new or self.cli_args.clean:
-                for snapshot in self._filter_backup_snapshots(source_dataset_snapshots):
-                    print("Deleting snapshot {}@{}...".format(source_dataset, snapshot))
-                    self.shell_command.delete_snapshot(source_dataset, snapshot)
-                if self.cli_args.clean:
-                    # abort further processing if clean is requested
-                    continue
-                source_dataset_snapshots = self.shell_command.get_snapshots(source_dataset)
-
+        # region recreate missing/aborted backup snapshots
+        recreated_snapshots: Dict[str, List[str]] = {}
+        if not self.cli_args.new:
+            for source in self.config.sources:
+                for dataset in source.get_matching_datasets():
+                    recreated = self._do_recreate_missing_backups(
+                        dataset.zfs_path,
+                        dataset.get_backup_snapshots(self.config.snapshot_prefix),
+                        source.get_all_target_paths(self.cli_args.target_filter))
+                    recreated_snapshots[dataset.zfs_path] = recreated
             if self.cli_args.missing:
                 # recreate missing/aborted backup snapshots, then exit
-                recreated = self._do_recreate_missing_backups(source_dataset, source_dataset_snapshots,
-                                                              source.get_all_target_paths(self.cli_args.target_filter))
-                continue
-            else:
-                # recreate missing/aborted backup snapshots, then create a new incremental backup
-                recreated = self._do_recreate_missing_backups(source_dataset, source_dataset_snapshots,
-                                                              source.get_all_target_paths(self.cli_args.target_filter))
+                return
+        # endregion
 
-            # detect previous and next snapshot
-            if (not self._has_initial_backup_snapshot(source_dataset_snapshots)
-                    and not self._has_intermediate_backup_snapshots(source_dataset_snapshots)):
-                print("No initial snapshot found for dataset {}".format(source_dataset))
-                print("Creating initial snapshot...")
-                previous_snapshot = None
-                next_snapshot = (self.config.snapshot_prefix
-                                 + SNAPSHOT_PREFIX_POSTFIX_SEPARATOR
-                                 + INITIAL_SNAPSHOT_POSTFIX)
-            else:
-                if self._has_initial_backup_snapshot(source_dataset_snapshots):
-                    pass
-                elif not self._has_intermediate_backup_snapshots(source_dataset_snapshots):
-                    print("No intermediate backup snapshots found for dataset {}".format(source_dataset))
-                    print("Cannot proceed without intermediate backup snapshots")
-                    print("Aborting...")
-                    sys.exit(1)
-                previous_snapshot, next_snapshot = self._get_next_snapshot_name(source_dataset_snapshots)
+        # region create new snapshots as bulk operation
+        dataset_snapshot_names: Dict[str, Tuple[Optional[str], str]] = {}
+        for source in self.config.sources:
+            for dataset in source.get_matching_datasets():
+                if (not dataset.has_initial_backup_snapshot(self.config.snapshot_prefix)
+                        and not dataset.has_intermediate_backup_snapshots(self.config.snapshot_prefix)):
+                    print("No initial snapshot found for dataset {}".format(dataset.zfs_path))
+                    print("Creating initial snapshot...")
+                    previous_snapshot = None
+                    next_snapshot = (self.config.snapshot_prefix
+                                     + SNAPSHOT_PREFIX_POSTFIX_SEPARATOR
+                                     + INITIAL_SNAPSHOT_POSTFIX)
+                else:
+                    if dataset.has_initial_backup_snapshot(self.config.snapshot_prefix):
+                        pass
+                    elif not dataset.has_intermediate_backup_snapshots(self.config.snapshot_prefix):
+                        print("No intermediate backup snapshots found for dataset {}".format(dataset.zfs_path))
+                        print("Cannot proceed without intermediate backup snapshots")
+                        print("Aborting...")
+                        sys.exit(1)
+                    previous_snapshot, next_snapshot = dataset.get_next_snapshot_name(self.config.snapshot_prefix)
 
-            if previous_snapshot in recreated and self.cli_args.skip_repaired_datasets:
-                print("Skipping creation of new incremental backup for {} because snapshots were re-created on a "
-                      "target".format(source_dataset))
-                continue
+                recreated = recreated_snapshots[dataset.zfs_path] if dataset.zfs_path in recreated_snapshots else []
 
-            # create new snapshot and perform backup
-            print("Creating snapshot {}@{}...".format(source_dataset, next_snapshot))
-            self.shell_command.create_snapshot(source_dataset, next_snapshot)
-            self._do_backup(source.get_all_target_paths(self.cli_args.target_filter),
-                            source_dataset, previous_snapshot, next_snapshot)
+                if previous_snapshot in recreated and self.cli_args.skip_repaired_datasets:
+                    print("Skipping creation of new incremental backup for {} because snapshots were re-created on a "
+                          "target".format(dataset.zfs_path))
+                    continue
+                else:
+                    # create new snapshot and perform backup
+                    print("Creating snapshot {}@{}...".format(dataset.zfs_path, next_snapshot))
+                    dataset.create_snapshot(next_snapshot)
+                    dataset_snapshot_names[dataset.zfs_path] = (previous_snapshot, next_snapshot)
+
+        # for source in self.config.sources:
+        #     for dataset in source.get_matching_datasets():
+        #         print("Creating snapshot {}@{}...".format(dataset.zfs_path, self.config.snapshot_prefix))
+        #         dataset.create_snapshot(self.config.snapshot_prefix)
+
+        # endregion
+
+        # region transmit backup as bulk operation
+        for source in self.config.sources:
+            for dataset in source.get_matching_datasets():
+                previous_snapshot, next_snapshot = dataset_snapshot_names[dataset.zfs_path]
+                self._do_backup(source.get_all_target_paths(self.cli_args.target_filter),
+                                dataset.zfs_path, previous_snapshot, next_snapshot)
         # endregion
 
     def _get_file_paths(self, target: str, path: str, file_postfix: str, collected_files: Set[str] = None) -> Set[str]:
@@ -927,7 +605,8 @@ class ZfsBackupTool(object):
                     if '@' in source:
                         raise ValueError("ZFS source '{}' contains '@', sources must not aim at snapshots!".format(
                             source))
-                backup_sources.append(BackupSource(section,
+
+                backup_sources.append(BackupSource(self.shell_command, section,
                                                    sources,
                                                    [target_groups[t] for t in targets],
                                                    parser.getboolean(section, 'recursive', fallback=False),
