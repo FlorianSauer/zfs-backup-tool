@@ -396,7 +396,7 @@ class ZfsBackupTool(object):
     backup_parser.add_argument('--missing', action='store_true',
                                help='Re-create backups only for missing snapshots. '
                                     'Skips creation of a new incremental backup.')
-    backup_parser.add_argument('--skip-repaired-datasets', action='store_true', dest='skip_repaired_datasets',
+    backup_parser.add_argument('--skip-repaired-datasets', action='store_true',
                                help='Will not create new backup snapshots on a dataset if the incremental base was '
                                     'missing and re-created on any target.')
     backup_parser.add_argument('--target-filter',
@@ -619,8 +619,8 @@ class ZfsBackupTool(object):
                 self.config.remote)
 
     def _do_recreate_missing_backups(self, source_dataset: str, source_dataset_snapshots: List[str],
-                                     target_paths: Set[str]):
-        recreated_snapshots = set()
+                                     target_paths: Set[str]) -> List[str]:
+        recreated_snapshots: List[str] = []
         sorted_existing_backup_snapshots = self._filter_backup_snapshots(source_dataset_snapshots, sort=True)
         for i, snapshot in enumerate(sorted_existing_backup_snapshots):
             incpmlete_targets = set()
@@ -650,9 +650,10 @@ class ZfsBackupTool(object):
                 print("Recreating missing backup {}@{} on target(s) {}".format(source_dataset, snapshot,
                                                                                ", ".join(incpmlete_targets)))
                 self._do_backup(incpmlete_targets, source_dataset, previous_snapshot, next_snapshot)
-                recreated_snapshots.add(snapshot)
+                recreated_snapshots.append(snapshot)
             else:
                 print("Backup {}@{} is complete on all targets".format(source_dataset, snapshot))
+        return recreated_snapshots
 
     def do_backup(self):
         selected_datasets: List[Tuple[str, BackupSource]] = []
