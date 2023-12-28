@@ -444,9 +444,8 @@ class ZfsBackupTool(object):
             existing_snapshot_paths: Set[str] = set()
             if not self.shell_command.file_exists(os.path.join(target, TARGET_SUBDIRECTORY, INITIALIZED_FILE_NAME),
                                                   self.config.remote):
-                print("Target {} is not initialized".format(target))
-                print("skipping...")
-                sys.exit(1)
+                print("Target {} is not initialized, skipping...".format(target), sys.stderr)
+                continue
             self._get_file_paths(target, os.path.join(target, TARGET_SUBDIRECTORY), BACKUP_FILE_POSTFIX,
                                  existing_snapshot_paths)
 
