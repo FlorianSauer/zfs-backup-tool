@@ -28,7 +28,11 @@ class EnvInterpolation(configparser.BasicInterpolation):
 
 class ZfsBackupTool(object):
     # region argparse setup
-    cli_parser = argparse.ArgumentParser(description='ZFS Backup Tool')
+    cli_parser = argparse.ArgumentParser(description='ZFS Backup Tool',
+                                         epilog='ZFS Backup Tool is a tool for performing ZFS backups. '
+                                                'It creates incremental backups and transmits them to one or more '
+                                                'target-disks on a local or remote machine. Written files are '
+                                                'verified using checksums.')
     cli_parser.add_argument('config', type=str, help='Path to config file')
     cli_parser.add_argument('--debug', action='store_true', help='Debug output')
     cli_parser.add_argument('--version', action='version', version='%(prog)s 0.1')
