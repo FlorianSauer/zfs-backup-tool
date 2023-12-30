@@ -80,6 +80,14 @@ class ShellCommand(object):
             command = 'mkdir -p "{}"'.format(path)
         return self._execute(command, capture_output=False)
 
+    def target_remove_file(self, path: str):
+        if self.remote:
+            command = self._get_ssh_command(self.remote)
+            command += shlex.quote('rm -f "{}"'.format(path))
+        else:
+            command = 'rm -f "{}"'.format(path)
+        return self._execute(command, capture_output=False)
+
     def target_write_to_file(self, path: str, content: str):
         command = "echo '{}' | ".format(content)
         if self.remote:
@@ -218,8 +226,7 @@ class ShellCommand(object):
                 os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
                              next_snapshot + BACKUP_FILE_POSTFIX))
             command += ' | sha256sum -b'
-        sub_process = self._execute(command, capture_output=True, capture_stderr=False
-                                    )
+        sub_process = self._execute(command, capture_output=True, capture_stderr=False)
         if not sub_process.stdout:
             raise ValueError("Could not determine checksum")
         checksum = sub_process.stdout.read().decode('utf-8').strip().split(' ')[0]
@@ -302,3 +309,16 @@ class ShellCommand(object):
         command += ' | zfs recv -F "{}"'.format(os.path.join(root_path, source_dataset))
 
         self._execute(command, capture_output=False)
+
+    def target_read_checksum_from_file(self, path: str) -> str:
+        if self.remote:
+            command = self._get_ssh_command(self.remote)
+            command += shlex.quote('cat "{}"'.format(path))
+        else:
+            command = 'cat "{}"'.format(path)
+
+        sub_process = self._execute(command, capture_output=True, capture_stderr=False)
+        if not sub_process.stdout:
+            raise ValueError("Could not determine checksum")
+        content = sub_process.stdout.read().decode('utf-8').strip().split(' ')[0]
+        return content

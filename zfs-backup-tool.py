@@ -76,9 +76,9 @@ class ZfsBackupTool(object):
     # endregion
 
     def __init__(self):
-        self.cli_args: argparse.Namespace = ...
-        self.config: BackupSetup = ...
-        self.shell_command: ShellCommand = ...
+        self.cli_args: argparse.Namespace = None  # type: ignore
+        self.config: BackupSetup = None  # type: ignore
+        self.shell_command: ShellCommand = None  # type: ignore
 
     def run(self):
         self.cli_args = self.cli_parser.parse_args(sys.argv[1:])
@@ -148,37 +148,107 @@ class ZfsBackupTool(object):
         for target in self.config.get_all_target_paths():
             self.shell_command.target_mkdir(os.path.join(target, TARGET_SUBDIRECTORY))
             self.shell_command.target_write_to_file(os.path.join(target, TARGET_SUBDIRECTORY, INITIALIZED_FILE_NAME),
-                                             "initialized")
+                                                    "initialized")
 
     def _do_backup(self, target_paths: Set[str], source_dataset: str,
-                   previous_snapshot: Optional[str], next_snapshot: str):
+                   previous_snapshot: Optional[str], next_snapshot: str,
+                   overwrite: bool = True):
         for target_path in target_paths:
             self.shell_command.target_mkdir(os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset))
-        print("Transmitting backup to target(s): {}...".format(", ".join(sorted(target_paths))))
-        backup_checksum = self.shell_command.zfs_send_snapshot_to_target(
-            source_dataset, previous_snapshot, next_snapshot, target_paths,
-            self.config.include_intermediate_snapshots)
-        print("Created backup snapshot {}@{} with checksum {}".format(
-            source_dataset, next_snapshot, backup_checksum))
-        print("Verifying written backups...")
-        read_checksums = self.shell_command.target_get_checksums(source_dataset, next_snapshot, target_paths)
-        for target_path, read_checksum in read_checksums.items():
-            if read_checksum != backup_checksum:
-                print("Checksum mismatch for backup {}@{} on target {}".format(
-                    source_dataset, next_snapshot, target_path))
-                print("Expected checksum: {}".format(backup_checksum))
-                print("Read checksum: {}".format(read_checksum))
-                print("Aborting...")
-                sys.exit(1)
+
+        skip_zfs_send = False
+        skip_verification = False
+        backup_checksum = None
+
+        if not overwrite:
+            remotes_have_snapshot_file = (
+                self.shell_command.target_file_exists(
+                    os.path.join(tp, TARGET_SUBDIRECTORY, source_dataset,
+                                 next_snapshot + BACKUP_FILE_POSTFIX))
+                for tp in target_paths
+            )
+            if all(remotes_have_snapshot_file):
+                remotes_have_checksum_file = (
+                    self.shell_command.target_file_exists(
+                        os.path.join(tp, TARGET_SUBDIRECTORY, source_dataset,
+                                     next_snapshot + BACKUP_FILE_POSTFIX + CHECKSUM_FILE_POSTFIX))
+                    for tp in target_paths
+                )
+                if all(remotes_have_checksum_file):
+                    print("Backup {}@{} already exists on all targets and checksums were written.".format(
+                        source_dataset, next_snapshot))
+                    skip_zfs_send = True
+                    skip_verification = True
+                else:
+                    print("Unusual State detected: checksum file missing on some targets.")
+
+                    remotes_have_temporary_checksum_file = (
+                        self.shell_command.target_file_exists(
+                            os.path.join(tp, TARGET_SUBDIRECTORY, source_dataset,
+                                         next_snapshot + BACKUP_FILE_POSTFIX + EXPECTED_CHECKSUM_FILE_POSTFIX))
+                        for tp in target_paths
+                    )
+                    if any(remotes_have_temporary_checksum_file):
+                        for target_path in target_paths:
+                            try:
+                                backup_checksum = self.shell_command.target_read_checksum_from_file(
+                                    os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
+                                                 next_snapshot + BACKUP_FILE_POSTFIX + EXPECTED_CHECKSUM_FILE_POSTFIX))
+                            except CommandExecutionError:
+                                pass
+                            else:
+                                break
+                        if backup_checksum:
+                            print('Skipping re-writing of backup "{}@{}" because it already exists on all targets and '
+                                  'a checksum was found.')
+                            skip_zfs_send = True
             else:
-                print("Checksum verified for backup {}@{} on target {}".format(
-                    source_dataset, next_snapshot, target_path))
+                print("Unusual State detected: Backup {}@{} does not exist on all targets.".format(
+                    source_dataset, next_snapshot))
+
+        if not skip_zfs_send:
+            print("Transmitting backup to target(s): {}...".format(", ".join(sorted(target_paths))))
+            backup_checksum = self.shell_command.zfs_send_snapshot_to_target(
+                source_dataset, previous_snapshot, next_snapshot, target_paths,
+                self.config.include_intermediate_snapshots)
+            print("Created backup snapshot {}@{} with checksum {}".format(
+                source_dataset, next_snapshot, backup_checksum))
+
+            # after transmission, write checksum to temporary file on target
+            # it gets replaced later by the 'final' checksum file
+            for target_path in target_paths:
+                self.shell_command.target_write_to_file(
+                    os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
+                                 next_snapshot + BACKUP_FILE_POSTFIX + EXPECTED_CHECKSUM_FILE_POSTFIX),
+                    "{} ./{}".format(backup_checksum, next_snapshot + BACKUP_FILE_POSTFIX))
+        else:
+            assert backup_checksum
+
+        if not skip_verification:
+            print("Verifying written backups...")
+            read_checksums = self.shell_command.target_get_checksums(source_dataset, next_snapshot, target_paths)
+            for target_path, read_checksum in read_checksums.items():
+                if read_checksum != backup_checksum:
+                    print("Checksum mismatch for backup {}@{} on target {}".format(
+                        source_dataset, next_snapshot, target_path))
+                    print("Expected checksum: {}".format(backup_checksum))
+                    print("Read checksum: {}".format(read_checksum))
+                    print("Aborting...")
+                    sys.exit(1)
+                else:
+                    print("Checksum verified for backup {}@{} on target {}".format(
+                        source_dataset, next_snapshot, target_path))
+
+            for target_path in target_paths:
+                self.shell_command.target_write_to_file(
+                    os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
+                                 next_snapshot + BACKUP_FILE_POSTFIX + CHECKSUM_FILE_POSTFIX),
+                    "{} ./{}".format(backup_checksum, next_snapshot + BACKUP_FILE_POSTFIX))
 
         for target_path in target_paths:
-            self.shell_command.target_write_to_file(
+            self.shell_command.target_remove_file(
                 os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
-                             next_snapshot + BACKUP_FILE_POSTFIX + CHECKSUM_FILE_POSTFIX),
-                "{} ./{}".format(backup_checksum, next_snapshot + BACKUP_FILE_POSTFIX))
+                             next_snapshot + BACKUP_FILE_POSTFIX + EXPECTED_CHECKSUM_FILE_POSTFIX))
 
     def _do_recreate_missing_backups(self, source_dataset: str, source_dataset_snapshots: List[str],
                                      target_paths: Set[str]) -> List[str]:
@@ -213,7 +283,7 @@ class ZfsBackupTool(object):
                     raise ValueError("Unexpected state")
                 print("Recreating missing backup {}@{} on target(s) {}".format(source_dataset, snapshot,
                                                                                ", ".join(incomplete_targets)))
-                self._do_backup(incomplete_targets, source_dataset, previous_snapshot, next_snapshot)
+                self._do_backup(incomplete_targets, source_dataset, previous_snapshot, next_snapshot, overwrite=False)
                 recreated_snapshots.append(snapshot)
             else:
                 print("Backup {}@{} is complete on all targets".format(source_dataset, snapshot))
