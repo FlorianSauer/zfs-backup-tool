@@ -1,12 +1,12 @@
 import os
-import sys
 import shlex
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import List, Optional, Set, Dict, Tuple
+from typing import List, Optional, Set, Dict, Tuple, cast
 
 from ZfsBackupTool.Constants import TARGET_SUBDIRECTORY, BACKUP_FILE_POSTFIX
 from ZfsBackupTool.SshHost import SshHost
@@ -22,8 +22,12 @@ class CommandExecutionError(Exception):
 class ShellCommand(object):
     _PV_DEFAULT_OPTIONS = "--force --rate --average-rate --bytes --timer --eta"
 
-    def __init__(self, echo_cmd=False):
+    def __init__(self, echo_cmd=False, remote: SshHost = None):
         self.echo_cmd = echo_cmd
+        self.remote = remote
+
+    def set_remote_host(self, remote: Optional[SshHost]):
+        self.remote = remote
 
     def _execute(self, command: str, capture_output: bool, capture_stdout=True, capture_stderr=True,
                  dev_null_output=False) -> subprocess.Popen:
@@ -68,18 +72,18 @@ class ShellCommand(object):
             command += "{} ".format(remote.host)
         return command
 
-    def mkdir(self, path: str, remote: SshHost = None):
-        if remote:
-            command = self._get_ssh_command(remote)
+    def target_mkdir(self, path: str):
+        if self.remote:
+            command = self._get_ssh_command(self.remote)
             command += shlex.quote('mkdir -p "{}"'.format(path))
         else:
             command = 'mkdir -p "{}"'.format(path)
         return self._execute(command, capture_output=False)
 
-    def write_to_file(self, path: str, content: str, remote: SshHost = None):
+    def target_write_to_file(self, path: str, content: str):
         command = "echo '{}' | ".format(content)
-        if remote:
-            command += self._get_ssh_command(remote)
+        if self.remote:
+            command += self._get_ssh_command(self.remote)
             command += shlex.quote('cat - > "{}"'.format(path))
         else:
             command += 'cat - > "{}"'.format(path)
@@ -105,7 +109,12 @@ class ShellCommand(object):
             exit_code = sub_process.returncode
         return exit_code == 0
 
-    def program_is_installed(self, program: str, remote: SshHost = None):
+    _NONE = cast(SshHost, object())
+
+    def program_is_installed(self, program: str, remote: Optional[SshHost] = _NONE) -> bool:
+        # fall back to default set remote host
+        if remote is self._NONE:
+            remote = self.remote
         if remote:
             command = self._get_ssh_command(remote)
             command += shlex.quote('which "{}"'.format(program))
@@ -119,6 +128,8 @@ class ShellCommand(object):
             stderr_data = e.sub_process.stderr.read().decode('utf-8') if e.sub_process.stderr else ""
             print(stderr_data, file=sys.stderr)
             sys.exit(1)
+        else:
+            return True
 
     def create_snapshot(self, source_dataset: str, next_snapshot: str):
         command = 'zfs snapshot "{}@{}"'.format(source_dataset, next_snapshot)
@@ -154,10 +165,10 @@ class ShellCommand(object):
                 return int(line.replace("size", "").strip())
         raise ValueError("Could not determine snapshot size")
 
-    def zfs_send_snapshot(self, source_dataset: str, previous_snapshot: Optional[str], next_snapshot: str,
-                          target_paths: Set[str],
-                          remote: SshHost = None,
-                          include_intermediate_snapshots: bool = False) -> str:
+    def zfs_send_snapshot_to_target(self, source_dataset: str,
+                                    previous_snapshot: Optional[str], next_snapshot: str,
+                                    target_paths: Set[str],
+                                    include_intermediate_snapshots: bool = False) -> str:
 
         estimated_size = self.get_estimated_snapshot_size(source_dataset, previous_snapshot, next_snapshot,
                                                           include_intermediate_snapshots)
@@ -169,13 +180,13 @@ class ShellCommand(object):
                     "-I" if include_intermediate_snapshots else '-i',
                     source_dataset, previous_snapshot, source_dataset, next_snapshot)
             else:
-                command = 'zfs send --raw {}@{}'.format(source_dataset, next_snapshot)
+                command = 'zfs send --raw "{}@{}"'.format(source_dataset, next_snapshot)
 
             command += ' | tee >( sha256sum -b > "{}" )'.format(tmp.name)
             command += ' | pv {} --size {}'.format(self._PV_DEFAULT_OPTIONS, estimated_size)
 
-            if remote:
-                command += ' | ' + self._get_ssh_command(remote)
+            if self.remote:
+                command += ' | ' + self._get_ssh_command(self.remote)
                 tee_quoted_paths = ' '.join('"{}"'.format(
                     os.path.join(path, TARGET_SUBDIRECTORY, source_dataset, next_snapshot + BACKUP_FILE_POSTFIX))
                                             for path in sorted(target_paths))
@@ -189,10 +200,10 @@ class ShellCommand(object):
             self._execute(command, capture_output=False)
             return tmp.read().decode('utf-8').strip().split(' ')[0]
 
-    def _get_checksum(self, output_dict: Dict[str, str], access_lock: threading.Lock,
-                      source_dataset: str, next_snapshot: str, target_path: str, remote: SshHost = None) -> None:
-        if remote:
-            command = self._get_ssh_command(remote)
+    def _target_get_checksum(self, output_dict: Dict[str, str], access_lock: threading.Lock,
+                             source_dataset: str, next_snapshot: str, target_path: str) -> None:
+        if self.remote:
+            command = self._get_ssh_command(self.remote)
             checksum_command = 'pv {} --name "{}" --cursor "{}"'.format(
                 self._PV_DEFAULT_OPTIONS,
                 target_path,
@@ -215,14 +226,14 @@ class ShellCommand(object):
         with access_lock:
             output_dict[target_path] = checksum
 
-    def get_checksums(self, source_dataset: str, next_snapshot: str, target_paths: Set[str], remote: SshHost = None):
+    def target_get_checksums(self, source_dataset: str, next_snapshot: str, target_paths: Set[str]):
         threads = []
         output_dict: Dict[str, str] = {}
         access_lock = threading.Lock()
         for target_path in sorted(target_paths):
-            thread = threading.Thread(target=self._get_checksum, args=(output_dict, access_lock,
-                                                                       source_dataset, next_snapshot, target_path,
-                                                                       remote), daemon=True)
+            thread = threading.Thread(target=self._target_get_checksum,
+                                      args=(output_dict, access_lock, source_dataset, next_snapshot, target_path),
+                                      daemon=True)
             threads.append(thread)
 
         for thread in threads:
@@ -233,9 +244,9 @@ class ShellCommand(object):
 
         return output_dict
 
-    def file_exists(self, path: str, remote: SshHost = None):
-        if remote:
-            command = self._get_ssh_command(remote)
+    def target_file_exists(self, path: str):
+        if self.remote:
+            command = self._get_ssh_command(self.remote)
             command += shlex.quote('test -f "{}"'.format(path))
         else:
             command = 'test -f "{}"'.format(path)
@@ -247,9 +258,10 @@ class ShellCommand(object):
             exit_code = sub_process.returncode
         return exit_code == 0
 
-    def list_directory(self, path: str, remote: SshHost = None) -> Tuple[List[str], List[str]]:
-        if remote:
-            command = self._get_ssh_command(remote)
+    def target_list_directory(self, path: str) -> Tuple[List[str], List[str]]:
+        """Returns a tuple of files and directories in the given directory"""
+        if self.remote:
+            command = self._get_ssh_command(self.remote)
             command += shlex.quote('ls -AF "{}"'.format(path))
         else:
             command = 'ls -AF "{}"'.format(path)
@@ -268,8 +280,7 @@ class ShellCommand(object):
                 files.append(line)
         return files, directories
 
-    def zfs_recv_snapshot(self, root_path: str, source_dataset: str, snapshot: str, target: str,
-                          remote: SshHost = None) -> None:
+    def zfs_recv_snapshot_from_target(self, root_path: str, source_dataset: str, snapshot: str, target: str) -> None:
 
         # create datasets under root path, without the last part of the dataset path.
         # the last part is created by zfs recv.
@@ -282,8 +293,8 @@ class ShellCommand(object):
                 self._execute('zfs create "{}"'.format(re_joined_parts), capture_output=False)
 
         backup_path = os.path.join(target, TARGET_SUBDIRECTORY, source_dataset, snapshot + BACKUP_FILE_POSTFIX)
-        if remote:
-            command = self._get_ssh_command(remote)
+        if self.remote:
+            command = self._get_ssh_command(self.remote)
             command += shlex.quote(
                 'pv {} "{}"'.format(self._PV_DEFAULT_OPTIONS, backup_path))
         else:

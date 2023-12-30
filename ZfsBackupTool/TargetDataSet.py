@@ -1,25 +1,37 @@
-from typing import List, Optional, Tuple, Iterable
+import os.path
+from typing import List, Tuple, Optional, Set
 
 from ZfsBackupTool.CliInterface import CliInterface
-from ZfsBackupTool.Constants import SNAPSHOT_PREFIX_POSTFIX_SEPARATOR, INITIAL_SNAPSHOT_POSTFIX
+from ZfsBackupTool.Constants import SNAPSHOT_PREFIX_POSTFIX_SEPARATOR, INITIAL_SNAPSHOT_POSTFIX, BACKUP_FILE_POSTFIX, \
+    TARGET_SUBDIRECTORY
+from ZfsBackupTool.DataSet import DataSet
 from ZfsBackupTool.ShellCommand import ShellCommand
 
 
-class DataSet(CliInterface):
+class TargetDataSet(CliInterface):
 
-    def __init__(self, shell_command: ShellCommand, zfs_path: str):
+    def __init__(self, shell_command: ShellCommand, zfs_path: str, target_paths: List[str]):
         super().__init__(shell_command)
         self.zfs_path = zfs_path
+        self.target_paths = set(target_paths)
         self._snapshots: Optional[List[str]] = None
 
-    def __hash__(self):
-        return hash(self.zfs_path)
+    def add_target_path(self, target_path: str) -> None:
+        self.target_paths.add(target_path)
 
-    def invalidate_caches(self):
-        self._snapshots = None
+    def get_all_target_paths(self) -> Set[str]:
+        return self.target_paths
+
+    def add_snapshot(self, snapshot: str) -> None:
+        if self._snapshots is None:
+            self._snapshots = []
+        if snapshot in self._snapshots:
+            raise ValueError("Snapshot already added!")
+        self._snapshots.append(snapshot)
 
     @classmethod
     def get_recursive(cls, shell_command: ShellCommand, zfs_path: str) -> List['DataSet']:
+        raise NotImplementedError
         selected_source_datasets = shell_command.get_datasets(zfs_path, recursive=True)
         return [cls(shell_command, dataset) for dataset in selected_source_datasets]
 
@@ -27,7 +39,11 @@ class DataSet(CliInterface):
         if refresh:
             self._snapshots = None
         if self._snapshots is None:
-            self._snapshots = self.shell_command.get_snapshots(self.zfs_path)
+            for target_path in self.target_paths:
+                files, directories = self.shell_command.target_list_directory(
+                    os.path.join(target_path, TARGET_SUBDIRECTORY, self.zfs_path))
+                self._snapshots = [f.replace(BACKUP_FILE_POSTFIX, '')
+                                   for f in files if f.endswith(BACKUP_FILE_POSTFIX)]
         return self._snapshots
 
     @classmethod
@@ -38,10 +54,9 @@ class DataSet(CliInterface):
 
     def get_backup_snapshots(self, snapshot_prefix: str) -> List[str]:
         matching_snapshots = self.filter_backup_snapshots(self.get_snapshots(), snapshot_prefix)
-        return self.sort_backup_snapshots(matching_snapshots)
+        return self._sort_backup_snapshots(matching_snapshots)
 
-    @classmethod
-    def sort_backup_snapshots(cls, snapshots: Iterable[str]) -> List[str]:
+    def _sort_backup_snapshots(self, snapshots: List[str]) -> List[str]:
         ordered_snapshots: List[str] = []
         for snapshot in sorted(snapshots):
             if snapshot.endswith(INITIAL_SNAPSHOT_POSTFIX):

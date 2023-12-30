@@ -1,14 +1,12 @@
 from typing import List, Set
 
 from ZfsBackupTool.BackupSource import BackupSource
-from ZfsBackupTool.SshHost import SshHost
 
 
 class BackupSetup(object):
-    def __init__(self, sources: List[BackupSource], remote: SshHost = None, snapshot_prefix: str = None,
+    def __init__(self, sources: List[BackupSource], snapshot_prefix: str = None,
                  include_intermediate_snapshots: bool = False):
         self.sources = sources
-        self.remote = remote
         self.snapshot_prefix = snapshot_prefix or "backup-snapshot"
         self.include_intermediate_snapshots = include_intermediate_snapshots
 

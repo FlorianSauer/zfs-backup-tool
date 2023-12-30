@@ -48,10 +48,16 @@ class ZfsBackupTool(object):
                                help='Removes all backup snapshots. Does not create new backup.')
     backup_parser.add_argument('--missing', action='store_true',
                                help='Re-create backups only for missing snapshots. '
-                                    'Skips creation of a new incremental backup.')
+                                    'Skips creation of a new incremental backup. '
+                                    'Useful for resuming previously aborted backup runs.')
     backup_parser.add_argument('--skip-repaired-datasets', action='store_true',
                                help='Will not create new backup snapshots on a dataset if the incremental base was '
-                                    'missing and re-created on any target.')
+                                    'missing and re-created on any target. '
+                                    'Useful for setups where a dataset was already backed up using a different '
+                                    'config file previously. '
+                                    'This occurs when the same dataset is backed up by two different config files. '
+                                    'Use this option if this double referenced dataset should not get an additional '
+                                    'backup snapshot during the second backup-run.')
     backup_parser.add_argument('--target-filter',
                                help='Perform backup only to targets starting with given filter.')
     restore_parser = subparsers.add_parser('restore', help='Perform restore into given root path.',
@@ -64,7 +70,7 @@ class ZfsBackupTool(object):
     list_parser.add_argument('--local', action='store_true',
                              help='List local backup snapshots which match the defined datasets in the given config.')
     list_parser.add_argument('--all', action='store_true',
-                             help='List all stored backup snapshots stored on targets. '
+                             help='List all stored datasets and matching snapshots on all targets.'
                                   'When used with --local, lists all snapshots under matching datasets.')
 
     # endregion
@@ -80,7 +86,8 @@ class ZfsBackupTool(object):
     def run(self):
         self.cli_args = self.cli_parser.parse_args(sys.argv[1:])
         self.shell_command = ShellCommand(echo_cmd=self.cli_args.debug)
-        self.config = self._load_config(self.cli_args.config)
+        self.config, global_remote = self._load_config(self.cli_args.config)
+        self.shell_command.set_remote_host(global_remote)
         self.do_check_programs_installed()
         if self.cli_args.subparser_name is None:
             self.cli_parser.print_help()
@@ -96,73 +103,41 @@ class ZfsBackupTool(object):
 
     def do_check_programs_installed(self):
         for program in ["ssh", "zfs", "pv", "sha256sum"]:
-            self.shell_command.program_is_installed(program)
+            self.shell_command.program_is_installed(program, remote=None)
         for program in ["pv", "sha256sum"]:
-            self.shell_command.program_is_installed(program, self.config.remote)
-
-    def _get_stored_snapshots_from_targets(self) -> Dict[str, List[str]]:
-        collected_snapshot_paths: Set[str] = set()
-        for target in self.config.get_all_target_paths():
-            existing_snapshot_paths: Set[str] = set()
-            if not self.shell_command.file_exists(os.path.join(target, TARGET_SUBDIRECTORY, INITIALIZED_FILE_NAME),
-                                                  self.config.remote):
-                print("Target {} is not initialized, skipping...".format(target), file=sys.stderr)
-                continue
-            self._get_file_paths(target, os.path.join(target, TARGET_SUBDIRECTORY), BACKUP_FILE_POSTFIX,
-                                 existing_snapshot_paths)
-
-            if not existing_snapshot_paths:
-                print("No backups found on target {}".format(target))
-                continue
-
-            collected_snapshot_paths.update(existing_snapshot_paths)
-
-        if not collected_snapshot_paths:
-            print("No backups found on any target!")
-            sys.exit(1)
-
-        grouped_snapshots = self._group_snapshots_by_source(collected_snapshot_paths, BACKUP_FILE_POSTFIX)
-        return grouped_snapshots
-
-    def _filter_backup_datasets_by_config(self, datasets: List[str]) -> List[str]:
-        matching_datasets = []
-        for source in self.config.sources:
-            for dataset in datasets:
-                if source.recursive:
-                    if not any(dataset.startswith(s) for s in source.zfs_source):
-                        continue
-                else:
-                    if dataset not in source.zfs_source:
-                        continue
-                matching_datasets.append(dataset)
-        return matching_datasets
+            self.shell_command.program_is_installed(program)
 
     def do_list(self):
         if self.cli_args.local:
-            datasets = []
             for source in self.config.sources:
-                for config_source_dataset in source.zfs_source:
-                    if not self.shell_command.has_dataset(config_source_dataset):
+                invalid_sources = source.invalid_zfs_sources()
+                if invalid_sources:
+                    for invalid_source in invalid_sources:
                         print("Source dataset {} defined in '{}' does not exist".format(
-                            config_source_dataset, source.name))
+                            invalid_source, source.name))
                         print("Aborting...")
-                        exit(1)
-                    selected_source_datasets = self.shell_command.get_datasets(config_source_dataset, source.recursive)
-                    datasets.extend(selected_source_datasets)
-            for dataset in sorted(datasets):
-                dataset_snapshots = self.shell_command.get_snapshots(dataset)
-                if not self.cli_args.all:
-                    dataset_snapshots = self._filter_backup_snapshots(dataset_snapshots, sort=True)
-                for snapshot in dataset_snapshots:
-                    print("{}@{}".format(dataset, snapshot))
+                    exit(1)
+
+                for dataset in source.get_matching_datasets():
+                    if self.cli_args.all:
+                        dataset_snapshots = dataset.get_snapshots()
+                    else:
+                        dataset_snapshots = dataset.get_backup_snapshots(self.config.snapshot_prefix)
+                    for snapshot in dataset_snapshots:
+                        print("{}@{}".format(dataset.zfs_path, snapshot))
         else:
-            grouped_snapshots = self._get_stored_snapshots_from_targets()
-            selected_datasets = list(grouped_snapshots.keys())
-            if not self.cli_args.all:
-                selected_datasets = self._filter_backup_datasets_by_config(selected_datasets)
-            for dataset in sorted(selected_datasets):
-                for snapshot in grouped_snapshots[dataset]:
-                    print("{}@{}".format(dataset, snapshot))
+            for source in self.config.sources:
+                if self.cli_args.all:
+                    remote_datasets = source.get_available_target_datasets()
+                else:
+                    remote_datasets = source.get_matching_target_datasets()
+                for remote_dataset in remote_datasets:
+                    if self.cli_args.all:
+                        snapshots = remote_dataset.get_snapshots()
+                    else:
+                        snapshots = remote_dataset.get_backup_snapshots(self.config.snapshot_prefix)
+                    for snapshot in snapshots:
+                        print("{}@{}".format(remote_dataset.zfs_path, snapshot))
 
     def do_init(self):
         if not self.cli_args.yes:
@@ -174,84 +149,22 @@ class ZfsBackupTool(object):
                 return
         print("Initializing backup targets...")
         for target in self.config.get_all_target_paths():
-            self.shell_command.mkdir(os.path.join(target, TARGET_SUBDIRECTORY), self.config.remote)
-            self.shell_command.write_to_file(os.path.join(target, TARGET_SUBDIRECTORY, INITIALIZED_FILE_NAME),
-                                             "initialized", self.config.remote)
-
-    def _filter_targets_by_filter(self, targets: List[TargetGroup]) -> List[TargetGroup]:
-        if self.cli_args.target_filter:
-            targets = [target for target in targets if target.name.startswith(self.cli_args.target_filter)]
-        return targets
-
-    def _sort_backup_snapshots(self, snapshots: List[str]) -> List[str]:
-        ordered_snapshots: List[str] = []
-        for snapshot in sorted(snapshots):
-            if snapshot.endswith(INITIAL_SNAPSHOT_POSTFIX):
-                ordered_snapshots.insert(0, snapshot)
-            else:
-                ordered_snapshots.append(snapshot)
-        return ordered_snapshots
-
-    def _filter_backup_snapshots(self, snapshots: List[str], sort=True) -> List[str]:
-        matching_snapshots = [snapshot for snapshot in snapshots
-                              if snapshot.startswith(self.config.snapshot_prefix)]
-
-        if sort:
-            return self._sort_backup_snapshots(matching_snapshots)
-        else:
-            return matching_snapshots
-
-    def _has_initial_backup_snapshot(self, snapshots: List[str]) -> bool:
-        for snapshot in snapshots:
-            if snapshot.startswith(self.config.snapshot_prefix) and snapshot.endswith(
-                    SNAPSHOT_PREFIX_POSTFIX_SEPARATOR + INITIAL_SNAPSHOT_POSTFIX):
-                return True
-        return False
-
-    def _get_highest_snapshot_number(self, snapshots: List[str]) -> int:
-        highest_snapshot_number = 0  # next snapshot after initial snapshot is always 1
-        for snapshot in snapshots:
-            if snapshot.startswith(self.config.snapshot_prefix):
-                if snapshot.endswith(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR + INITIAL_SNAPSHOT_POSTFIX):
-                    continue
-                snapshot_number = int(snapshot.split(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR)[-1])
-                if snapshot_number > highest_snapshot_number:
-                    highest_snapshot_number = snapshot_number
-        return highest_snapshot_number
-
-    def _has_intermediate_backup_snapshots(self, snapshots: List[str]) -> bool:
-        return self._get_highest_snapshot_number(snapshots) > 0
-
-    def _get_next_snapshot_name(self, snapshots: List[str]) -> Tuple[str, str]:
-        highest_snapshot_number = self._get_highest_snapshot_number(snapshots)
-        # next snapshot after initial snapshot is always 1, 1 gets added later
-        if highest_snapshot_number == 0:
-            previous_snapshot = (self.config.snapshot_prefix
-                                 + SNAPSHOT_PREFIX_POSTFIX_SEPARATOR
-                                 + INITIAL_SNAPSHOT_POSTFIX)
-        else:
-            previous_snapshot = (self.config.snapshot_prefix
-                                 + SNAPSHOT_PREFIX_POSTFIX_SEPARATOR
-                                 + str(highest_snapshot_number))
-        next_snapshot = (self.config.snapshot_prefix
-                         + SNAPSHOT_PREFIX_POSTFIX_SEPARATOR
-                         + str(highest_snapshot_number + 1))
-        return previous_snapshot, next_snapshot
+            self.shell_command.target_mkdir(os.path.join(target, TARGET_SUBDIRECTORY))
+            self.shell_command.target_write_to_file(os.path.join(target, TARGET_SUBDIRECTORY, INITIALIZED_FILE_NAME),
+                                             "initialized")
 
     def _do_backup(self, target_paths: Set[str], source_dataset: str,
                    previous_snapshot: Optional[str], next_snapshot: str):
         for target_path in target_paths:
-            self.shell_command.mkdir(os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset),
-                                     self.config.remote)
+            self.shell_command.target_mkdir(os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset))
         print("Transmitting backup to target(s): {}...".format(", ".join(sorted(target_paths))))
-        backup_checksum = self.shell_command.zfs_send_snapshot(
+        backup_checksum = self.shell_command.zfs_send_snapshot_to_target(
             source_dataset, previous_snapshot, next_snapshot, target_paths,
-            self.config.remote, self.config.include_intermediate_snapshots)
+            self.config.include_intermediate_snapshots)
         print("Created backup snapshot {}@{} with checksum {}".format(
             source_dataset, next_snapshot, backup_checksum))
         print("Verifying written backups...")
-        read_checksums = self.shell_command.get_checksums(
-            source_dataset, next_snapshot, target_paths, self.config.remote)
+        read_checksums = self.shell_command.target_get_checksums(source_dataset, next_snapshot, target_paths)
         for target_path, read_checksum in read_checksums.items():
             if read_checksum != backup_checksum:
                 print("Checksum mismatch for backup {}@{} on target {}".format(
@@ -265,31 +178,32 @@ class ZfsBackupTool(object):
                     source_dataset, next_snapshot, target_path))
 
         for target_path in target_paths:
-            self.shell_command.write_to_file(
+            self.shell_command.target_write_to_file(
                 os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
                              next_snapshot + BACKUP_FILE_POSTFIX + CHECKSUM_FILE_POSTFIX),
-                "{} ./{}".format(backup_checksum, next_snapshot + BACKUP_FILE_POSTFIX),
-                self.config.remote)
+                "{} ./{}".format(backup_checksum, next_snapshot + BACKUP_FILE_POSTFIX))
 
     def _do_recreate_missing_backups(self, source_dataset: str, source_dataset_snapshots: List[str],
                                      target_paths: Set[str]) -> List[str]:
         recreated_snapshots: List[str] = []
-        sorted_existing_backup_snapshots = self._filter_backup_snapshots(source_dataset_snapshots, sort=True)
+        sorted_existing_backup_snapshots = DataSet.filter_backup_snapshots(source_dataset_snapshots,
+                                                                           self.config.snapshot_prefix)
         for i, snapshot in enumerate(sorted_existing_backup_snapshots):
-            incpmlete_targets = set()
+            incomplete_targets = set()
+            # find missing/incomplete backups, backups are complete if they have a checksum file
             for target_path in target_paths:
-                if not self.shell_command.file_exists(
+                if not self.shell_command.target_file_exists(
                         os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
-                                     snapshot + BACKUP_FILE_POSTFIX + CHECKSUM_FILE_POSTFIX),
-                        self.config.remote):
-                    incpmlete_targets.add(target_path)
-            if incpmlete_targets:
+                                     snapshot + BACKUP_FILE_POSTFIX + CHECKSUM_FILE_POSTFIX)):
+                    incomplete_targets.add(target_path)
+            # process incomplete targets
+            if incomplete_targets:
                 if i == 0 and snapshot.endswith(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR + INITIAL_SNAPSHOT_POSTFIX):
                     previous_snapshot = None
                     next_snapshot = snapshot
                 elif i == 0 and not snapshot.endswith(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR + INITIAL_SNAPSHOT_POSTFIX):
                     print("Cannot recreate missing backup {}@{} on target(s) {} because intermediate source snapshot "
-                          "is missing".format(source_dataset, snapshot, ", ".join(incpmlete_targets)))
+                          "is missing".format(source_dataset, snapshot, ", ".join(incomplete_targets)))
                     if not self.cli_args.yes:
                         if input("Continue? [y/N] ").lower() != 'y':
                             print("Aborting...")
@@ -301,8 +215,8 @@ class ZfsBackupTool(object):
                 else:
                     raise ValueError("Unexpected state")
                 print("Recreating missing backup {}@{} on target(s) {}".format(source_dataset, snapshot,
-                                                                               ", ".join(incpmlete_targets)))
-                self._do_backup(incpmlete_targets, source_dataset, previous_snapshot, next_snapshot)
+                                                                               ", ".join(incomplete_targets)))
+                self._do_backup(incomplete_targets, source_dataset, previous_snapshot, next_snapshot)
                 recreated_snapshots.append(snapshot)
             else:
                 print("Backup {}@{} is complete on all targets".format(source_dataset, snapshot))
@@ -313,7 +227,7 @@ class ZfsBackupTool(object):
         print("Checking source datasets...")
 
         # region check if all source datasets exist, are not selected twice and map them into selected_datasets
-        selected_datasets: Set[DataSet] = set()
+        selected_datasets: Dict[str, DataSet] = {}
         for source in self.config.sources:
             # if not self.shell_command.has_dataset(config_source_dataset):
             invalid_sources = source.invalid_zfs_sources()
@@ -323,14 +237,14 @@ class ZfsBackupTool(object):
                         invalid_source, source.name))
                     print("Aborting...")
                 exit(1)
-            selected_source_datasets = source.get_matching_datasets()
-            overlapping_datasets = set(selected_datasets).intersection(set(selected_source_datasets))
+            selected_source_datasets = {d.zfs_path: d for d in source.get_matching_datasets()}
+            overlapping_datasets = set(selected_datasets.keys()).intersection(set(selected_source_datasets.keys()))
             if overlapping_datasets:
                 print("Source dataset(s) {} defined in '{}' overlap with already selected datasets".format(
-                    ", ".join(s.zfs_path for s in overlapping_datasets), source.name))
+                    ", ".join(overlapping_datasets), source.name))
                 print("Aborting...")
                 exit(1)
-            selected_datasets.update(set(source.get_matching_datasets()))
+            selected_datasets.update(selected_source_datasets)
         # endregion
 
         # region reset snapshots if requested
@@ -395,44 +309,16 @@ class ZfsBackupTool(object):
                     dataset.create_snapshot(next_snapshot)
                     dataset_snapshot_names[dataset.zfs_path] = (previous_snapshot, next_snapshot)
 
-        # for source in self.config.sources:
-        #     for dataset in source.get_matching_datasets():
-        #         print("Creating snapshot {}@{}...".format(dataset.zfs_path, self.config.snapshot_prefix))
-        #         dataset.create_snapshot(self.config.snapshot_prefix)
-
         # endregion
 
         # region transmit backup as bulk operation
         for source in self.config.sources:
             for dataset in source.get_matching_datasets():
-                previous_snapshot, next_snapshot = dataset_snapshot_names[dataset.zfs_path]
-                self._do_backup(source.get_all_target_paths(self.cli_args.target_filter),
-                                dataset.zfs_path, previous_snapshot, next_snapshot)
+                if dataset.zfs_path in dataset_snapshot_names:
+                    previous_snapshot, next_snapshot = dataset_snapshot_names[dataset.zfs_path]
+                    self._do_backup(source.get_all_target_paths(self.cli_args.target_filter),
+                                    dataset.zfs_path, previous_snapshot, next_snapshot)
         # endregion
-
-    def _get_file_paths(self, target: str, path: str, file_postfix: str, collected_files: Set[str] = None) -> Set[str]:
-        if collected_files is None:
-            collected_files = set()
-        files, directories = self.shell_command.list_directory(path, self.config.remote)
-        for file in files:
-            if file.endswith(file_postfix):
-                collected_files.add(
-                    os.path.join(path, file).replace(os.path.join(target, TARGET_SUBDIRECTORY) + os.path.sep, ''))
-        for directory in directories:
-            self._get_file_paths(target, os.path.join(path, directory), file_postfix, collected_files)
-        return collected_files
-
-    def _group_snapshots_by_source(self, snapshot_paths: Set[str], file_postfix: str) -> Dict[str, List[str]]:
-        grouped_snapshots: Dict[str, List[str]] = {}
-        for snapshot_path in snapshot_paths:
-            source_dataset, snapshot = snapshot_path.rsplit(os.path.sep, 1)
-            snapshot = snapshot.replace(file_postfix, '')
-            if source_dataset not in grouped_snapshots:
-                grouped_snapshots[source_dataset] = []
-            grouped_snapshots[source_dataset].append(snapshot)
-        for source_dataset in grouped_snapshots:
-            grouped_snapshots[source_dataset] = self._sort_backup_snapshots(grouped_snapshots[source_dataset])
-        return grouped_snapshots
 
     def _do_restore_into_target(self, source_dataset: str, snapshots: List[str], root_path: str, targets: Set[str]):
 
@@ -448,10 +334,10 @@ class ZfsBackupTool(object):
                 backup_file = os.path.join(target, TARGET_SUBDIRECTORY, source_dataset,
                                            snapshot + BACKUP_FILE_POSTFIX)
                 checksum_file = backup_file + CHECKSUM_FILE_POSTFIX
-                if not self.shell_command.file_exists(backup_file, self.config.remote):
+                if not self.shell_command.target_file_exists(backup_file):
                     print("Cannot use {} as a restore source for {}@{} because it has no backup file".format(
                         target, source_dataset, snapshot))
-                elif not self.shell_command.file_exists(checksum_file, self.config.remote):
+                elif not self.shell_command.target_file_exists(checksum_file):
                     print("Cannot use {} as a restore source for {}@{} because it has no checksum file".format(
                         target, source_dataset, snapshot))
                 else:
@@ -481,8 +367,7 @@ class ZfsBackupTool(object):
             for target_i, target in enumerate(snapshot_sources[snapshot]):
                 print("Restoring {}@{} under {} from {}".format(source_dataset, snapshot, root_path, target))
                 try:
-                    self.shell_command.zfs_recv_snapshot(root_path, source_dataset, snapshot, target,
-                                                         self.config.remote)
+                    self.shell_command.zfs_recv_snapshot_from_target(root_path, source_dataset, snapshot, target)
                 except CommandExecutionError as e:
                     print("Error restoring {}@{} under {} from {}".format(source_dataset, snapshot, root_path, target))
                     if target_i + 1 < len(snapshot_sources[snapshot]):
@@ -513,33 +398,18 @@ class ZfsBackupTool(object):
             print("Aborting...")
             exit(1)
 
-        grouped_snapshots = self._get_stored_snapshots_from_targets()
+        for source in self.config.sources:
+            remote_datasets = source.get_matching_target_datasets()
 
-        if self.cli_args.filter:
-            for dataset in sorted(grouped_snapshots.keys()):
-                if self.cli_args.filter and self.cli_args.filter not in dataset:
+            for dataset in remote_datasets:
+                if self.cli_args.filter and not dataset.zfs_path.startswith(self.cli_args.filter):
                     continue
-                matching_snapshots = self._filter_backup_snapshots(grouped_snapshots[dataset], sort=True)
-                if not matching_snapshots:
+                backup_snapshots = dataset.get_backup_snapshots(self.config.snapshot_prefix)
+                if not backup_snapshots:
                     print("No matching snapshots found for dataset {}".format(dataset))
                     continue
-                self._do_restore_into_target(dataset, matching_snapshots,
-                                             self.cli_args.restore, self.config.get_all_target_paths())
-        else:
-            for source in self.config.sources:
-                for dataset in sorted(grouped_snapshots.keys()):
-                    if source.recursive:
-                        if not any(dataset.startswith(s) for s in source.zfs_source):
-                            continue
-                    else:
-                        if dataset not in source.zfs_source:
-                            continue
-                    matching_snapshots = self._filter_backup_snapshots(grouped_snapshots[dataset], sort=True)
-                    if not matching_snapshots:
-                        print("No matching snapshots found for dataset {}".format(dataset))
-                        continue
-                    self._do_restore_into_target(dataset, matching_snapshots,
-                                                 self.cli_args.restore, source.get_all_target_paths())
+                self._do_restore_into_target(dataset.zfs_path, backup_snapshots,
+                                             self.cli_args.restore, dataset.get_all_target_paths())
 
     def _itemize_option(self, option_content: Optional[str]) -> List[str]:
         if not option_content:
@@ -551,7 +421,7 @@ class ZfsBackupTool(object):
             items.extend(i.strip() for i in line.split(','))
         return items
 
-    def _load_config(self, path: str) -> BackupSetup:
+    def _load_config(self, path: str) -> Tuple[BackupSetup, Optional[SshHost]]:
         parser = configparser.ConfigParser(interpolation=EnvInterpolation(),
                                            converters={'list': lambda x: [i.strip() for i in x.split(',')]}
                                            )
@@ -584,7 +454,8 @@ class ZfsBackupTool(object):
         target_groups = {}
         for section in parser.sections():
             if section.lower().startswith('target-group') or section.lower().startswith('targetgroup'):
-                target_group = TargetGroup(self._itemize_option(parser.get(section, 'path')),
+                target_group = TargetGroup(self.shell_command,
+                                           self._itemize_option(parser.get(section, 'path')),
                                            section)
                 target_groups[section] = target_group
                 if section.lower().startswith('target-group'):
@@ -614,7 +485,7 @@ class ZfsBackupTool(object):
                                                    self._itemize_option(parser.get(section, 'include', fallback=None)),
                                                    ))
 
-        return BackupSetup(backup_sources, remote, snapshot_prefix, include_intermediate_snapshots)
+        return BackupSetup(backup_sources, snapshot_prefix, include_intermediate_snapshots), remote
 
 
 if __name__ == "__main__":
