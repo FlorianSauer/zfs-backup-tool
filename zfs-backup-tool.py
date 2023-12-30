@@ -200,7 +200,7 @@ class ZfsBackupTool(object):
                                 break
                         if backup_checksum:
                             print('Skipping re-writing of backup "{}@{}" because it already exists on all targets and '
-                                  'a checksum was found.')
+                                  'a checksum was found.'.format(source_dataset, next_snapshot))
                             skip_zfs_send = True
             else:
                 print("Unusual State detected: Backup {}@{} does not exist on all targets.".format(
