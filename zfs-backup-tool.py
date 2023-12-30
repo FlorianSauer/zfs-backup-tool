@@ -197,6 +197,8 @@ class ZfsBackupTool(object):
                             except CommandExecutionError:
                                 pass
                             else:
+                                print('Found checksum for backup "{}@{}" on target "{}": {}'.format(
+                                    source_dataset, next_snapshot, target_path, backup_checksum))
                                 break
                         if backup_checksum:
                             print('Skipping re-writing of backup "{}@{}" because it already exists on all targets and '
