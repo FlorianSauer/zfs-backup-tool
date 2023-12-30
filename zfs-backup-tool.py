@@ -76,12 +76,9 @@ class ZfsBackupTool(object):
     # endregion
 
     def __init__(self):
-        # noinspection PyTypeChecker
-        self.cli_args: argparse.Namespace
-        # noinspection PyTypeChecker
-        self.config: BackupSetup
-        # noinspection PyTypeChecker
-        self.shell_command: ShellCommand
+        self.cli_args: argparse.Namespace = ...
+        self.config: BackupSetup = ...
+        self.shell_command: ShellCommand = ...
 
     def run(self):
         self.cli_args = self.cli_parser.parse_args(sys.argv[1:])
