@@ -11,6 +11,7 @@ from ZfsBackupTool.Constants import *
 from ZfsBackupTool.DataSet import DataSet
 from ZfsBackupTool.ShellCommand import ShellCommand, CommandExecutionError
 from ZfsBackupTool.SshHost import SshHost
+from ZfsBackupTool.TargetDataSet import TargetDataSet
 from ZfsBackupTool.TargetGroup import TargetGroup
 
 
@@ -127,18 +128,21 @@ class ZfsBackupTool(object):
                     for snapshot in dataset_snapshots:
                         print("{}@{}".format(dataset.zfs_path, snapshot))
         else:
+            found_datasets: Dict[str, TargetDataSet] = {}
             for source in self.config.sources:
                 if self.cli_args.all:
                     remote_datasets = source.get_available_target_datasets()
                 else:
                     remote_datasets = source.get_matching_target_datasets()
-                for remote_dataset in remote_datasets:
-                    if self.cli_args.all:
-                        snapshots = remote_dataset.get_snapshots()
-                    else:
-                        snapshots = remote_dataset.get_backup_snapshots(self.config.snapshot_prefix)
-                    for snapshot in snapshots:
-                        print("{}@{}".format(remote_dataset.zfs_path, snapshot))
+                found_datasets.update({d.zfs_path: d for d in remote_datasets})
+
+            for zfs_path in sorted(found_datasets.keys()):
+                if self.cli_args.all:
+                    snapshots = found_datasets[zfs_path].get_snapshots()
+                else:
+                    snapshots = found_datasets[zfs_path].get_backup_snapshots(self.config.snapshot_prefix)
+                for snapshot in snapshots:
+                    print("{}@{}".format(zfs_path, snapshot))
 
     def do_init(self):
         if not self.cli_args.yes:
