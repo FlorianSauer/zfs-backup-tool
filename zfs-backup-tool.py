@@ -459,7 +459,8 @@ class ZfsBackupTool(object):
                 break
 
         current_snapshots = self.shell_command.get_snapshots(os.path.join(root_path, source_dataset))
-        if len(restored_snapshot_names) == len(snapshots) and set(restored_snapshot_names) == set(current_snapshots):
+        if (len(restored_snapshot_names) == len(snapshots)
+                and set(restored_snapshot_names).issubset(set(current_snapshots))):
             print("Successfully restored {} under {}".format(source_dataset, root_path))
             return
         else:
