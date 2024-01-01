@@ -142,7 +142,6 @@ class ZfsBackupTool(object):
                 else:
                     remote_datasets = source.get_matching_target_datasets()
                 found_datasets.update({d.zfs_path: d for d in remote_datasets})
-
             for zfs_path in sorted(found_datasets.keys()):
                 if self.cli_args.all:
                     snapshots = found_datasets[zfs_path].get_snapshots()
@@ -224,7 +223,8 @@ class ZfsBackupTool(object):
                     source_dataset, next_snapshot))
 
         if not skip_zfs_send:
-            print("Transmitting backup to target(s): {}...".format(", ".join(sorted(target_paths))))
+            print("Transmitting backup snapshot {}@{} to target(s): {}...".format(
+                source_dataset, next_snapshot, ", ".join(sorted(target_paths))))
             backup_checksum = self.shell_command.zfs_send_snapshot_to_target(
                 source_dataset, previous_snapshot, next_snapshot, target_paths,
                 self.config.include_intermediate_snapshots)
