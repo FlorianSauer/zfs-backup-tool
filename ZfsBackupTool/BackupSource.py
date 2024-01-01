@@ -4,7 +4,7 @@ from typing import List, Optional, Set, Dict, Iterable
 from ZfsBackupTool.CliInterface import CliInterface
 from ZfsBackupTool.Constants import TARGET_SUBDIRECTORY
 from ZfsBackupTool.DataSet import DataSet
-from ZfsBackupTool.ShellCommand import ShellCommand
+from ZfsBackupTool.ShellCommand import ShellCommand, CommandExecutionError
 from ZfsBackupTool.TargetDataSet import TargetDataSet
 from ZfsBackupTool.TargetGroup import TargetGroup
 
@@ -82,22 +82,22 @@ class BackupSource(CliInterface):
         """
 
         collected_target_datasets: Dict[str, TargetDataSet] = {}
-        for target_group in self.targets:
-            for target_path in target_group.paths:
-                target_path_prefix = os.path.join(target_path, TARGET_SUBDIRECTORY) + os.path.sep
-                target_dataset_dirs = self._get_directory_paths(target_path_prefix)
-                if not target_dataset_dirs:
-                    print("No backups found on target {}".format(target_path))
-                    continue
-                for target_dataset_path in target_dataset_dirs:
-                    zfs_path = target_dataset_path.replace(target_path_prefix, '')
-                    if zfs_path not in collected_target_datasets:
-                        target_dataset = TargetDataSet(self.shell_command, zfs_path,
-                                                       [target_path, ])
-                        collected_target_datasets[zfs_path] = target_dataset
-                    else:
-                        target_dataset = collected_target_datasets[zfs_path]
-                        target_dataset.add_target_path(target_path)
+        for zfs_path in self.zfs_source:
+            for target_group in self.targets:
+                for target_path in target_group.paths:
+                    target_path_prefix = os.path.join(target_path, TARGET_SUBDIRECTORY) + os.path.sep
+                    target_dataset_dirs = self._get_directory_paths(os.path.join(target_path_prefix, zfs_path))
+                    if not target_dataset_dirs:
+                        continue
+                    for target_dataset_path in target_dataset_dirs:
+                        zfs_path = target_dataset_path.replace(target_path_prefix, '')
+                        if zfs_path not in collected_target_datasets:
+                            target_dataset = TargetDataSet(self.shell_command, zfs_path,
+                                                           [target_path, ])
+                            collected_target_datasets[zfs_path] = target_dataset
+                        else:
+                            target_dataset = collected_target_datasets[zfs_path]
+                            target_dataset.add_target_path(target_path)
 
         return [collected_target_datasets[dataset] for dataset in sorted(collected_target_datasets.keys())]
 
@@ -120,7 +120,10 @@ class BackupSource(CliInterface):
     def _get_directory_paths(self, path: str, collected_directories: Set[str] = None) -> Set[str]:
         if collected_directories is None:
             collected_directories = set()
-        files, directories = self.shell_command.target_list_directory(path)
+        try:
+            files, directories = self.shell_command.target_list_directory(path)
+        except CommandExecutionError:
+            return collected_directories
         for directory in directories:
             collected_directories.add(os.path.join(path, directory))
         for directory in directories:
