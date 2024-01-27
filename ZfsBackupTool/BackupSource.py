@@ -1,4 +1,5 @@
 import os
+import re
 from typing import List, Optional, Set, Dict, Iterable
 
 from ZfsBackupTool.CliInterface import CliInterface
@@ -43,6 +44,15 @@ class BackupSource(CliInterface):
                 invalid_zfs_sources.append(zfs_source)
         return invalid_zfs_sources
 
+    def _matches_regex(self, include_regex, exclude_regex, zfs_path) -> bool:
+        for regex in include_regex:
+            if regex.match(zfs_path):
+                return True
+        for regex in exclude_regex:
+            if regex.match(zfs_path):
+                return False
+        return not include_regex
+
     def get_matching_datasets(self, refresh: bool = False) -> List[DataSet]:
         if refresh:
             self._datasets = None
@@ -53,7 +63,14 @@ class BackupSource(CliInterface):
                     self._datasets.extend(DataSet.get_recursive(self.shell_command, zfs_source))
                 else:
                     self._datasets.append(DataSet(self.shell_command, zfs_source))
+            if self.include or self.exclude:
+                include_regex = [re.compile(s) for s in self.include] if self.include else []
+                exclude_regex = [re.compile(s) for s in self.exclude] if self.exclude else []
+                self._datasets = [dataset for dataset in self._datasets if self._matches_regex(
+                    include_regex, exclude_regex, dataset.zfs_path)]
+
             self._datasets = sorted(self._datasets, key=lambda dataset: dataset.zfs_path)
+
         return self._datasets
 
     def filter_matching_datasets(self, datasets: Iterable[str]) -> List[str]:
