@@ -107,13 +107,13 @@ class BackupSource(CliInterface):
                     if not target_dataset_dirs:
                         continue
                     for target_dataset_path in target_dataset_dirs:
-                        zfs_path = target_dataset_path.replace(target_path_prefix, '')
-                        if zfs_path not in collected_target_datasets:
-                            target_dataset = TargetDataSet(self.shell_command, zfs_path,
+                        target_zfs_path = target_dataset_path.replace(target_path_prefix, '')
+                        if target_zfs_path not in collected_target_datasets:
+                            target_dataset = TargetDataSet(self.shell_command, target_zfs_path,
                                                            [target_path, ])
-                            collected_target_datasets[zfs_path] = target_dataset
+                            collected_target_datasets[target_zfs_path] = target_dataset
                         else:
-                            target_dataset = collected_target_datasets[zfs_path]
+                            target_dataset = collected_target_datasets[target_zfs_path]
                             target_dataset.add_target_path(target_path)
 
         return [collected_target_datasets[dataset] for dataset in sorted(collected_target_datasets.keys())]
