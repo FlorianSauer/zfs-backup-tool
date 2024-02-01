@@ -274,11 +274,14 @@ class ZfsBackupTool(object):
                                                                            self.config.snapshot_prefix)
         for i, snapshot in enumerate(sorted_existing_backup_snapshots):
             incomplete_targets = set()
-            # find missing/incomplete backups, backups are complete if they have a checksum file
+            # find missing/incomplete backups, backups are complete if they exist and have a checksum file
             for target_path in target_paths:
-                if not self.shell_command.target_file_exists(
+                if not (self.shell_command.target_file_exists(
                         os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
-                                     snapshot + BACKUP_FILE_POSTFIX + CHECKSUM_FILE_POSTFIX)):
+                                     snapshot + BACKUP_FILE_POSTFIX))
+                        and self.shell_command.target_file_exists(
+                            os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
+                                         snapshot + BACKUP_FILE_POSTFIX + CHECKSUM_FILE_POSTFIX))):
                     incomplete_targets.add(target_path)
             # process incomplete targets
             if incomplete_targets:
