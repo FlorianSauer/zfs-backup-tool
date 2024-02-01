@@ -137,6 +137,7 @@ class BackupSource(CliInterface):
     def _get_directory_paths(self, path: str, collected_directories: Set[str] = None) -> Set[str]:
         if collected_directories is None:
             collected_directories = set()
+        collected_directories.add(path)
         try:
             files, directories = self.shell_command.target_list_directory(path)
         except CommandExecutionError:
