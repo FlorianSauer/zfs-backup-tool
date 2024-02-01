@@ -233,7 +233,8 @@ class ShellCommand(object):
         with access_lock:
             output_dict[target_path] = checksum
 
-    def target_get_checksums(self, source_dataset: str, next_snapshot: str, target_paths: Set[str]):
+    def target_get_checksums(self, source_dataset: str, next_snapshot: str, target_paths: Set[str],
+                             start_delay: int = 1):
         threads = []
         output_dict: Dict[str, str] = {}
         access_lock = threading.Lock()
@@ -243,9 +244,10 @@ class ShellCommand(object):
                                       daemon=True)
             threads.append(thread)
 
-        for thread in threads:
+        for i, thread in enumerate(threads):
             thread.start()
-            time.sleep(1)
+            if start_delay and i < len(threads) - 1:
+                time.sleep(start_delay)
         for thread in threads:
             thread.join()
 
