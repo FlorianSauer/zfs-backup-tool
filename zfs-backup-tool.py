@@ -319,12 +319,16 @@ class ZfsBackupTool(object):
 
     def do_backup(self):
 
-        print("Checking source datasets...")
-
         # region check if all source datasets exist, are not selected twice and map them into selected_datasets
+        selected_sources: List[BackupSource] = []
         selected_datasets: Dict[str, DataSet] = {}
         for source in self.config.sources:
-            # if not self.shell_command.has_dataset(config_source_dataset):
+            target_paths = source.get_all_target_paths(self.cli_args.target_filter)
+            if not target_paths:
+                print("All targets filtered out for source '{}', skipping source".format(source.name))
+                continue
+            else:
+                selected_sources.append(source)
             invalid_sources = source.invalid_zfs_sources()
             if invalid_sources:
                 for invalid_source in invalid_sources:
@@ -344,7 +348,7 @@ class ZfsBackupTool(object):
 
         # region reset snapshots if requested
         if self.cli_args.new or self.cli_args.clean:
-            for source in self.config.sources:
+            for source in selected_sources:
                 for dataset in source.get_matching_datasets():
                     for snapshot in dataset.get_backup_snapshots(self.config.snapshot_prefix):
                         print("Deleting snapshot {}@{}...".format(dataset.zfs_path, snapshot))
@@ -358,7 +362,7 @@ class ZfsBackupTool(object):
         # region recreate missing/aborted backup snapshots
         recreated_snapshots: Dict[str, List[str]] = {}
         if not self.cli_args.new:
-            for source in self.config.sources:
+            for source in selected_sources:
                 for dataset in source.get_matching_datasets():
                     recreated = self._do_recreate_missing_backups(
                         dataset.zfs_path,
@@ -372,7 +376,7 @@ class ZfsBackupTool(object):
 
         # region create new snapshots as bulk operation
         dataset_snapshot_names: Dict[str, Tuple[Optional[str], str]] = {}
-        for source in self.config.sources:
+        for source in selected_sources:
             for dataset in source.get_matching_datasets():
                 if (not dataset.has_initial_backup_snapshot(self.config.snapshot_prefix)
                         and not dataset.has_intermediate_backup_snapshots(self.config.snapshot_prefix)):
@@ -407,7 +411,7 @@ class ZfsBackupTool(object):
         # endregion
 
         # region transmit backup as bulk operation
-        for source in self.config.sources:
+        for source in selected_sources:
             for dataset in source.get_matching_datasets():
                 if dataset.zfs_path in dataset_snapshot_names:
                     previous_snapshot, next_snapshot = dataset_snapshot_names[dataset.zfs_path]
