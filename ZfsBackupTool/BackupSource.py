@@ -82,6 +82,11 @@ class BackupSource(CliInterface):
             else:
                 if dataset not in self.zfs_source:
                     continue
+            if self.include or self.exclude:
+                include_regex = [re.compile(s) for s in self.include] if self.include else []
+                exclude_regex = [re.compile(s) for s in self.exclude] if self.exclude else []
+                if not self._matches_regex(include_regex, exclude_regex, dataset):
+                    continue
             matching_datasets.append(dataset)
         return matching_datasets
 
