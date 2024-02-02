@@ -44,7 +44,7 @@ class TargetDataSet(CliInterface):
                     os.path.join(target_path, TARGET_SUBDIRECTORY, self.zfs_path))
                 self._snapshots = [f.replace(BACKUP_FILE_POSTFIX, '')
                                    for f in files if f.endswith(BACKUP_FILE_POSTFIX)]
-        return self._snapshots
+        return self._snapshots  # type: ignore
 
     @classmethod
     def filter_backup_snapshots(cls, snapshots: List[str], snapshot_prefix: str) -> List[str]:
@@ -55,6 +55,21 @@ class TargetDataSet(CliInterface):
     def get_backup_snapshots(self, snapshot_prefix: str) -> List[str]:
         matching_snapshots = self.filter_backup_snapshots(self.get_snapshots(), snapshot_prefix)
         return self._sort_backup_snapshots(matching_snapshots)
+
+    def get_expected_backup_snapshots(self, snapshot_prefix: str) -> List[str]:
+        highest_snapshot_number = self._get_highest_snapshot_number(snapshot_prefix)
+        expected_snapshots = []
+        for snapshot_number in range(0, highest_snapshot_number+1):
+            if snapshot_number == 0:
+                expected_snapshot = (snapshot_prefix
+                                     + SNAPSHOT_PREFIX_POSTFIX_SEPARATOR
+                                     + INITIAL_SNAPSHOT_POSTFIX)
+            else:
+                expected_snapshot = (snapshot_prefix
+                                     + SNAPSHOT_PREFIX_POSTFIX_SEPARATOR
+                                     + str(snapshot_number))
+            expected_snapshots.append(expected_snapshot)
+        return expected_snapshots
 
     def _sort_backup_snapshots(self, snapshots: List[str]) -> List[str]:
         ordered_snapshots: List[str] = []

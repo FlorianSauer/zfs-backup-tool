@@ -77,6 +77,12 @@ class ZfsBackupTool(object):
     restore_parser.add_argument('restore', type=str, help='Perform restore into given root path.')
     restore_parser.add_argument('-f', '--filter',
                                 help='Perform restore only for datasets starting with given filter.')
+    verify_parser = subparsers.add_parser('verify', help='Verify backup files on targets.',
+                                          description='Verify backup files on targets.')
+    verify_parser.add_argument('-f', '--filter',
+                               help='Perform verification only for datasets starting with given filter.')
+    verify_parser.add_argument('--all', action='store_true',
+                               help='Verify all stored datasets and matching snapshots on targets.')
     list_parser = subparsers.add_parser('list', help='List backup snapshots stored on targets.',
                                         description='List backup snapshots stored on targets.')
     list_parser.add_argument('--local', action='store_true',
@@ -109,6 +115,8 @@ class ZfsBackupTool(object):
             self.do_backup()
         if self.cli_args.subparser_name == 'restore':
             self.do_restore()
+        if self.cli_args.subparser_name == 'verify':
+            self.do_verify()
 
     def do_check_programs_installed(self):
         for program in ["ssh", "zfs", "pv", "sha256sum"]:
@@ -125,7 +133,7 @@ class ZfsBackupTool(object):
                         print("Source dataset {} defined in '{}' does not exist".format(
                             invalid_source, source.name))
                         print("Aborting...")
-                    exit(1)
+                    sys.exit(1)
 
                 for dataset in source.get_matching_datasets():
                     if self.cli_args.all:
@@ -294,7 +302,7 @@ class ZfsBackupTool(object):
                     if not self.cli_args.yes:
                         if input("Continue? [y/N] ").lower() != 'y':
                             print("Aborting...")
-                            exit(1)
+                            sys.exit(1)
                     continue
                 elif i > 0:
                     previous_snapshot = sorted_existing_backup_snapshots[i - 1]
@@ -323,14 +331,14 @@ class ZfsBackupTool(object):
                     print("Source dataset {} defined in '{}' does not exist".format(
                         invalid_source, source.name))
                     print("Aborting...")
-                exit(1)
+                sys.exit(1)
             selected_source_datasets = {d.zfs_path: d for d in source.get_matching_datasets()}
             overlapping_datasets = set(selected_datasets.keys()).intersection(set(selected_source_datasets.keys()))
             if overlapping_datasets:
                 print("Source dataset(s) {} defined in '{}' overlap with already selected datasets".format(
                     ", ".join(overlapping_datasets), source.name))
                 print("Aborting...")
-                exit(1)
+                sys.exit(1)
             selected_datasets.update(selected_source_datasets)
         # endregion
 
@@ -416,7 +424,7 @@ class ZfsBackupTool(object):
                 print("Cannot restore {} under {} because initial snapshot is missing".format(
                     source_dataset, root_path))
                 print("Aborting...")
-                exit(1)
+                sys.exit(1)
             for target in targets:
                 backup_file = os.path.join(target, TARGET_SUBDIRECTORY, source_dataset,
                                            snapshot + BACKUP_FILE_POSTFIX)
@@ -434,7 +442,7 @@ class ZfsBackupTool(object):
                 print("Cannot restore {}@{} because it has no backup on any target".format(
                     source_dataset, snapshot))
                 print("Aborting...")
-                exit(1)
+                sys.exit(1)
 
         restored_snapshot_names = []
         for snapshot_i, snapshot in enumerate(snapshots):
@@ -463,7 +471,7 @@ class ZfsBackupTool(object):
                     else:
                         print("all targets failed")
                         print("Aborting...")
-                        exit(1)
+                        sys.exit(1)
 
                 restored_snapshot_names.append(snapshot)
                 break
@@ -478,13 +486,13 @@ class ZfsBackupTool(object):
             print("Only restored snapshots: {}".format(restored_snapshot_names))
             print("Missing snapshots: {}".format(set(snapshots) - set(restored_snapshot_names)))
             print("Aborting...")
-            exit(1)
+            sys.exit(1)
 
     def do_restore(self):
         if not self.shell_command.has_dataset(self.cli_args.restore):
             print("Root path {} does not exist".format(self.cli_args.restore))
             print("Aborting...")
-            exit(1)
+            sys.exit(1)
 
         for source in self.config.sources:
             remote_datasets = source.get_matching_target_datasets()
@@ -498,6 +506,139 @@ class ZfsBackupTool(object):
                     continue
                 self._do_restore_into_target(dataset.zfs_path, backup_snapshots,
                                              self.cli_args.restore, dataset.get_all_target_paths())
+
+    def _do_verify(self, source_dataset: str, snapshots: List[str], targets: Set[str]):
+        return_val = True
+        snapshot_sources: Dict[str, Set[str]] = {}
+
+        print("Verifying stored snapshots of dataset {} under targets {}".format(
+            source_dataset, ', '.join(targets)))
+        for snapshot_i, snapshot in enumerate(snapshots):
+            snapshot_sources[snapshot] = set()
+            if snapshot_i == 0 and not snapshot.endswith(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR + INITIAL_SNAPSHOT_POSTFIX):
+                print("Error: Would not be able to restore {} because initial snapshot is missing".format(
+                    source_dataset))
+                return_val = False
+            for target in targets:
+                backup_file = os.path.join(target, TARGET_SUBDIRECTORY, source_dataset,
+                                           snapshot + BACKUP_FILE_POSTFIX)
+                checksum_file = backup_file + CHECKSUM_FILE_POSTFIX
+                if not self.shell_command.target_file_exists(backup_file):
+                    print("Error: Cannot use {} as a restore source for {}@{} because it has no backup file".format(
+                        target, source_dataset, snapshot))
+                    return_val = False
+                elif not self.shell_command.target_file_exists(checksum_file):
+                    print("Error: Cannot use {} as a restore source for {}@{} because it has no checksum file".format(
+                        target, source_dataset, snapshot))
+                    return_val = False
+                else:
+                    snapshot_sources[snapshot].add(target)
+
+            if not snapshot_sources[snapshot]:
+                print("Error: Cannot restore {}@{} because it has no backup on any target".format(
+                    source_dataset, snapshot))
+                return_val = False
+
+        if return_val is False:
+            return False
+
+        restorable_snapshot_names = []
+
+        for snapshot_i, snapshot in enumerate(snapshots):
+            target_expected_checksums = {}
+            for target in snapshot_sources[snapshot]:
+                target_expected_checksums[target] = self.shell_command.target_read_checksum_from_file(
+                    os.path.join(target, TARGET_SUBDIRECTORY, source_dataset,
+                                 snapshot + BACKUP_FILE_POSTFIX + CHECKSUM_FILE_POSTFIX))
+
+            if len(set(target_expected_checksums.values())) != 1:
+                print("Error: more than one checksum found for backup {}@{} on targets".format(
+                    source_dataset, snapshot))
+                print("       Checksums should be identical on all targets!")
+                print("       Checksums:")
+                for target_path in sorted(target_expected_checksums.keys()):
+                    print("           {}: {}".format(target_path, target_expected_checksums[target_path]))
+                return_val = False
+                continue
+
+            backup_checksum = next(iter(target_expected_checksums.values()))
+
+            print("Verifying checksum for backup {}@{} on targets {}".format(
+                source_dataset, snapshot, ', '.join(snapshot_sources[snapshot])))
+            read_checksums = self.shell_command.target_get_checksums(source_dataset, snapshot,
+                                                                     snapshot_sources[snapshot])
+
+            checksum_errors = 0
+            for target_path, read_checksum in read_checksums.items():
+                if read_checksum != backup_checksum:
+                    print("Error: Checksum mismatch for backup {}@{} on target {}".format(
+                        source_dataset, snapshot, target_path))
+                    print("       Expected checksum: {}".format(backup_checksum))
+                    print("       Read checksum: {}".format(read_checksum))
+                    checksum_errors += 1
+                else:
+                    print("Checksum verified for backup {}@{} on target {}".format(
+                        source_dataset, snapshot, target_path))
+
+            if checksum_errors == 0:
+                # if all targets have a valid checksum, the snapshot is restorable
+                restorable_snapshot_names.append(snapshot)
+            elif 0 < checksum_errors < len(snapshot_sources[snapshot]):
+                # if some targets have a checksum error, the snapshot is restorable
+                restorable_snapshot_names.append(snapshot)
+                # but its still an error
+                return_val = False
+            elif checksum_errors >= len(snapshot_sources[snapshot]):
+                # if all targets have a checksum error, the snapshot is not restorable
+                return_val = False
+            else:
+                raise ValueError("Unexpected state")
+
+        if return_val is False and restorable_snapshot_names == snapshots:
+            print("Error: Failed to verify all snapshots of dataset {} on all targets ".format(source_dataset))
+            print("       However, all snapshots are restorable")
+            print("       Validated snapshots: {}".format(restorable_snapshot_names))
+        elif return_val is False and restorable_snapshot_names != snapshots:
+            print("Error: Failed to verify all snapshots of dataset {} ".format(source_dataset))
+            print("       Validated snapshots: {}".format(restorable_snapshot_names))
+            print("       Un-restorable snapshots: {}".format(set(snapshots) - set(restorable_snapshot_names)))
+        else:
+            print("Successfully verified stored snapshots of dataset {} under all targets".format(source_dataset))
+
+        return return_val
+
+    def do_verify(self):
+        # simulate a restore procedure, but do not actually restore
+        # also verify checksums of stored backups on all targets for completeness
+        # also allow the user to verify all stored backups on all targets via --all
+        # this is done via directory traversal on the targets
+
+        exit_val = 0
+
+        for source in self.config.sources:
+            print("Verifying stored snapshots of source '{}'...".format(source.name))
+            if self.cli_args.all:
+                remote_datasets = source.get_available_target_datasets()
+            else:
+                remote_datasets = source.get_matching_target_datasets()
+
+            for dataset in remote_datasets:
+                if self.cli_args.filter and not dataset.zfs_path.startswith(self.cli_args.filter):
+                    continue
+                backup_snapshots = dataset.get_expected_backup_snapshots(self.config.snapshot_prefix)
+                if not backup_snapshots:
+                    print("Error: No snapshots found for dataset {} on targets".format(dataset.zfs_path))
+                    exit_val = 1
+                    continue
+                if not self._do_verify(dataset.zfs_path, backup_snapshots,
+                                       dataset.get_all_target_paths()):
+                    exit_val = 1
+
+        if exit_val == 0:
+            print("Successfully verified stored and expected backups on targets")
+        else:
+            print("Failed to verify stored and expected backups on targets")
+            sys.exit(1)
 
     def _itemize_option(self, option_content: Optional[str]) -> List[str]:
         if not option_content:
