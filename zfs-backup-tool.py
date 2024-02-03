@@ -85,6 +85,10 @@ class ZfsBackupTool(object):
                                help='Verify all matching datasets on targets.')
     verify_parser.add_argument('--target-filter',
                                help='Perform verification only on targets starting with given filter.')
+    verify_parser.add_argument('--remove-corrupted', action='store_true',
+                               help='DESTRUCTIVE OPERATION: Remove corrupted files from targets. '
+                                    'Detected corrupted files are removed from the target and can be re-created with '
+                                    '\'backup --missing\'')
     list_parser = subparsers.add_parser('list', help='List backup snapshots stored on targets.',
                                         description='List backup snapshots stored on targets.')
     list_parser.add_argument('--local', action='store_true',
@@ -513,7 +517,7 @@ class ZfsBackupTool(object):
                 self._do_restore_into_target(dataset.zfs_path, backup_snapshots,
                                              self.cli_args.restore, dataset.get_all_target_paths())
 
-    def _do_verify(self, source_dataset: str, snapshots: List[str], targets: Set[str]):
+    def _do_verify(self, source_dataset: str, snapshots: List[str], targets: Set[str], remove_corrupted: bool):
         return_val = True
         snapshot_sources: Dict[str, Set[str]] = {}
 
@@ -564,6 +568,13 @@ class ZfsBackupTool(object):
                 print("       Checksums:")
                 for target_path in sorted(target_expected_checksums.keys()):
                     print("           {}: {}".format(target_path, target_expected_checksums[target_path]))
+                if remove_corrupted:
+                    for target_path in snapshot_sources[snapshot]:
+                        print("Removing checksum file from target {} to trigger re-creation of backup files".format(
+                            target_path))
+                        self.shell_command.target_remove_file(
+                            os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
+                                         snapshot + BACKUP_FILE_POSTFIX + CHECKSUM_FILE_POSTFIX))
                 return_val = False
                 continue
 
@@ -581,6 +592,12 @@ class ZfsBackupTool(object):
                         source_dataset, snapshot, target_path))
                     print("       Expected checksum: {}".format(backup_checksum))
                     print("       Read checksum: {}".format(read_checksum))
+                    if remove_corrupted:
+                        print("       Removing checksum file from target {} to trigger re-creation of backup files"
+                              .format(target_path))
+                        self.shell_command.target_remove_file(
+                            os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
+                                         snapshot + BACKUP_FILE_POSTFIX + CHECKSUM_FILE_POSTFIX))
                     checksum_errors += 1
                 else:
                     print("Checksum verified for backup {}@{} on target {}".format(
@@ -669,7 +686,8 @@ class ZfsBackupTool(object):
                     exit_val = 1
                     continue
                 if not self._do_verify(dataset.zfs_path, backup_snapshots,
-                                       dataset.get_all_target_paths(self.cli_args.target_filter)):
+                                       dataset.get_all_target_paths(self.cli_args.target_filter),
+                                       self.cli_args.remove_corrupted):
                     exit_val = 1
 
         if exit_val == 0:
