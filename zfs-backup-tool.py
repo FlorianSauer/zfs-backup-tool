@@ -3,7 +3,7 @@ import configparser
 import os.path
 import sys
 from os.path import expandvars
-from typing import List, Set, Optional, Tuple, Dict
+from typing import List, Set, Optional, Tuple, Dict, Union
 
 from ZfsBackupTool.BackupSetup import BackupSetup
 from ZfsBackupTool.BackupSource import BackupSource
@@ -77,12 +77,14 @@ class ZfsBackupTool(object):
     restore_parser.add_argument('restore', type=str, help='Perform restore into given root path.')
     restore_parser.add_argument('-f', '--filter',
                                 help='Perform restore only for datasets starting with given filter.')
-    verify_parser = subparsers.add_parser('verify', help='Verify backup files on targets.',
-                                          description='Verify backup files on targets.')
+    verify_parser = subparsers.add_parser('verify', help='Verify datasets and their snapshots on targets.',
+                                          description='Verify datasets and their snapshots on targets.')
     verify_parser.add_argument('-f', '--filter',
                                help='Perform verification only for datasets starting with given filter.')
-    verify_parser.add_argument('--all', action='store_true',
-                               help='Verify all stored datasets and matching snapshots on targets.')
+    verify_parser.add_argument('--remote', action='store_true',
+                               help='Verify all matching datasets on targets.')
+    verify_parser.add_argument('--target-filter',
+                               help='Perform verification only on targets starting with given filter.')
     list_parser = subparsers.add_parser('list', help='List backup snapshots stored on targets.',
                                         description='List backup snapshots stored on targets.')
     list_parser.add_argument('--local', action='store_true',
@@ -619,23 +621,55 @@ class ZfsBackupTool(object):
 
         exit_val = 0
 
+        selected_sources: List[BackupSource] = []
+        selected_datasets: Dict[str, DataSet] = {}
         for source in self.config.sources:
-            print("Verifying stored snapshots of source '{}'...".format(source.name))
-            if self.cli_args.all:
-                remote_datasets = source.get_available_target_datasets()
+            target_paths = source.get_all_target_paths(self.cli_args.target_filter)
+            if not target_paths:
+                print("All targets filtered out for source '{}', skipping source".format(source.name))
+                continue
             else:
-                remote_datasets = source.get_matching_target_datasets()
+                selected_sources.append(source)
+            invalid_sources = source.invalid_zfs_sources()
+            if invalid_sources:
+                for invalid_source in invalid_sources:
+                    print("Source dataset {} defined in '{}' does not exist".format(
+                        invalid_source, source.name))
+                    print("Aborting...")
+                sys.exit(1)
+            selected_source_datasets = {d.zfs_path: d for d in source.get_matching_datasets()}
+            overlapping_datasets = set(selected_datasets.keys()).intersection(set(selected_source_datasets.keys()))
+            if overlapping_datasets:
+                print("Source dataset(s) {} defined in '{}' overlap with already selected datasets".format(
+                    ", ".join(overlapping_datasets), source.name))
+                print("Aborting...")
+                sys.exit(1)
+            selected_datasets.update(selected_source_datasets)
+        # endregion
+
+        for source in selected_sources:
+            print("Verifying stored snapshots of source '{}'...".format(source.name))
+            remote_datasets: List[Union[DataSet, TargetDataSet]] = []
+            if self.cli_args.remote:
+                remote_datasets.extend(source.get_available_target_datasets())
+            else:
+                remote_datasets.extend(source.get_matching_datasets())
 
             for dataset in remote_datasets:
                 if self.cli_args.filter and not dataset.zfs_path.startswith(self.cli_args.filter):
                     continue
-                backup_snapshots = dataset.get_expected_backup_snapshots(self.config.snapshot_prefix)
+                if isinstance(dataset, TargetDataSet):
+                    # calculate expected snapshots by logic and highest found backup snapshot
+                    backup_snapshots = dataset.get_expected_backup_snapshots(self.config.snapshot_prefix)
+                else:
+                    # get backup snapshots from local dataset
+                    backup_snapshots = dataset.get_backup_snapshots(self.config.snapshot_prefix)
                 if not backup_snapshots:
                     print("Error: No snapshots found for dataset {} on targets".format(dataset.zfs_path))
                     exit_val = 1
                     continue
                 if not self._do_verify(dataset.zfs_path, backup_snapshots,
-                                       dataset.get_all_target_paths()):
+                                       dataset.get_all_target_paths(self.cli_args.target_filter)):
                     exit_val = 1
 
         if exit_val == 0:
