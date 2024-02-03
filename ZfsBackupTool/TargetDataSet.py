@@ -19,8 +19,13 @@ class TargetDataSet(CliInterface):
     def add_target_path(self, target_path: str) -> None:
         self.target_paths.add(target_path)
 
-    def get_all_target_paths(self) -> Set[str]:
-        return self.target_paths
+    def get_all_target_paths(self, target_filter: Optional[str] = None) -> Set[str]:
+        paths = []
+        for target_path in self.target_paths:
+            if target_filter and not target_path.startswith(target_filter):
+                continue
+            paths.append(target_path)
+        return set(paths)
 
     def add_snapshot(self, snapshot: str) -> None:
         if self._snapshots is None:

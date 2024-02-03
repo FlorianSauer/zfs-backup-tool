@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple, Iterable
+from typing import List, Optional, Tuple, Iterable, Set
 
 from ZfsBackupTool.CliInterface import CliInterface
 from ZfsBackupTool.Constants import SNAPSHOT_PREFIX_POSTFIX_SEPARATOR, INITIAL_SNAPSHOT_POSTFIX
@@ -7,21 +7,33 @@ from ZfsBackupTool.ShellCommand import ShellCommand
 
 class DataSet(CliInterface):
 
-    def __init__(self, shell_command: ShellCommand, zfs_path: str):
+    def __init__(self, shell_command: ShellCommand, zfs_path: str, target_paths: Set[str]):
         super().__init__(shell_command)
         self.zfs_path = zfs_path
+        self.target_paths = set(target_paths)
         self._snapshots: Optional[List[str]] = None
 
     def __hash__(self):
         return hash(self.zfs_path)
 
+    def add_target_path(self, target_path: str) -> None:
+        self.target_paths.add(target_path)
+
+    def get_all_target_paths(self, target_filter: Optional[str] = None) -> Set[str]:
+        paths = []
+        for target_path in self.target_paths:
+            if target_filter and not target_path.startswith(target_filter):
+                continue
+            paths.append(target_path)
+        return set(paths)
+
     def invalidate_caches(self):
         self._snapshots = None
 
     @classmethod
-    def get_recursive(cls, shell_command: ShellCommand, zfs_path: str) -> List['DataSet']:
+    def get_recursive(cls, shell_command: ShellCommand, zfs_path: str, target_paths: Set[str]) -> List['DataSet']:
         selected_source_datasets = shell_command.get_datasets(zfs_path, recursive=True)
-        return [cls(shell_command, dataset) for dataset in selected_source_datasets]
+        return [cls(shell_command, dataset, target_paths) for dataset in selected_source_datasets]
 
     def get_snapshots(self, refresh: bool = False) -> List[str]:
         if refresh:

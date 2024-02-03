@@ -60,9 +60,11 @@ class BackupSource(CliInterface):
             self._datasets = []
             for zfs_source in sorted(self.zfs_source):
                 if self.recursive:
-                    self._datasets.extend(DataSet.get_recursive(self.shell_command, zfs_source))
+                    self._datasets.extend(DataSet.get_recursive(self.shell_command, zfs_source,
+                                                                self.get_all_target_paths()))
                 else:
-                    self._datasets.append(DataSet(self.shell_command, zfs_source))
+                    self._datasets.append(DataSet(self.shell_command, zfs_source,
+                                                  self.get_all_target_paths()))
             if self.include or self.exclude:
                 include_regex = [re.compile(s) for s in self.include] if self.include else []
                 exclude_regex = [re.compile(s) for s in self.exclude] if self.exclude else []
