@@ -265,7 +265,9 @@ class ShellCommand(object):
                 target_path,
                 os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
                              next_snapshot + BACKUP_FILE_POSTFIX))
-            checksum_command += ' | sha256sum -b'
+            checksum_command += ' | sha256sum -b > "{}"'.format(
+                os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
+                             next_snapshot + BACKUP_FILE_POSTFIX + CALCULATED_CHECKSUM_FILE_POSTFIX))
             command += shlex.quote(checksum_command)
         else:
             command = 'pv {} --name "{}" --cursor "{}"'.format(
