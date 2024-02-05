@@ -109,20 +109,29 @@ class ZfsBackupTool(object):
         self.shell_command = ShellCommand(echo_cmd=self.cli_args.debug)
         self.config, global_remote = self._load_config(self.cli_args.config)
         self.shell_command.set_remote_host(global_remote)
-        self.do_check_programs_installed()
-        if self.cli_args.subparser_name is None:
-            self.cli_parser.print_help()
-            sys.exit(1)
-        if self.cli_args.subparser_name == 'list':
-            self.do_list()
-        if self.cli_args.subparser_name == 'init':
-            self.do_init()
-        if self.cli_args.subparser_name == 'backup':
-            self.do_backup()
-        if self.cli_args.subparser_name == 'restore':
-            self.do_restore()
-        if self.cli_args.subparser_name == 'verify':
-            self.do_verify()
+
+        try:
+            self.do_check_programs_installed()
+            if self.cli_args.subparser_name is None:
+                self.cli_parser.print_help()
+                sys.exit(1)
+            if self.cli_args.subparser_name == 'list':
+                self.do_list()
+            if self.cli_args.subparser_name == 'init':
+                self.do_init()
+            if self.cli_args.subparser_name == 'backup':
+                self.do_backup()
+            if self.cli_args.subparser_name == 'restore':
+                self.do_restore()
+            if self.cli_args.subparser_name == 'verify':
+                self.do_verify()
+        except KeyboardInterrupt:
+            # only print stack trace if debug is enabled
+            if self.cli_args.debug:
+                raise
+            else:
+                print("... Aborted!")
+                sys.exit(1)
 
     def do_check_programs_installed(self):
         for program in ["ssh", "zfs", "pv", "sha256sum"]:
@@ -582,26 +591,35 @@ class ZfsBackupTool(object):
 
             print("Verifying checksum for backup {}@{} on targets {}".format(
                 source_dataset, snapshot, ', '.join(snapshot_sources[snapshot])))
-            read_checksums = self.shell_command.target_get_checksums(source_dataset, snapshot,
-                                                                     snapshot_sources[snapshot])
 
             checksum_errors = 0
-            for target_path, read_checksum in read_checksums.items():
-                if read_checksum != backup_checksum:
-                    print("Error: Checksum mismatch for backup {}@{} on target {}".format(
-                        source_dataset, snapshot, target_path))
-                    print("       Expected checksum: {}".format(backup_checksum))
-                    print("       Read checksum: {}".format(read_checksum))
-                    if remove_corrupted:
-                        print("       Removing checksum file from target {} to trigger re-creation of backup files"
-                              .format(target_path))
-                        self.shell_command.target_remove_file(
-                            os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
-                                         snapshot + BACKUP_FILE_POSTFIX + CHECKSUM_FILE_POSTFIX))
-                    checksum_errors += 1
-                else:
-                    print("Checksum verified for backup {}@{} on target {}".format(
-                        source_dataset, snapshot, target_path))
+            try:
+                read_checksums = self.shell_command.target_get_checksums(source_dataset, snapshot,
+                                                                         snapshot_sources[snapshot])
+            except KeyboardInterrupt:
+                print()  # newline after ^C
+                print("Skipping checksum verification for backup {}@{} on targets".format(
+                    source_dataset, snapshot))
+                print("Treating as 'successful' because the user interrupted the process")
+                print("Successful restore of this snapshot is not guaranteed!")
+                continue
+            else:
+                for target_path, read_checksum in read_checksums.items():
+                    if read_checksum != backup_checksum:
+                        print("Error: Checksum mismatch for backup {}@{} on target {}".format(
+                            source_dataset, snapshot, target_path))
+                        print("       Expected checksum: {}".format(backup_checksum))
+                        print("       Read checksum: {}".format(read_checksum))
+                        if remove_corrupted:
+                            print("       Removing checksum file from target {} to trigger re-creation of backup files"
+                                  .format(target_path))
+                            self.shell_command.target_remove_file(
+                                str(os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
+                                                 snapshot + BACKUP_FILE_POSTFIX + CHECKSUM_FILE_POSTFIX)))
+                        checksum_errors += 1
+                    else:
+                        print("Checksum verified for backup {}@{} on target {}".format(
+                            source_dataset, snapshot, target_path))
 
             if checksum_errors == 0:
                 # if all targets have a valid checksum, the snapshot is restorable

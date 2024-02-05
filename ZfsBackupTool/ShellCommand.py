@@ -5,6 +5,7 @@ import sys
 import tempfile
 import threading
 from pathlib import Path
+from subprocess import Popen
 from typing import List, Optional, Set, Dict, Tuple, cast, IO
 
 from ZfsBackupTool.Constants import TARGET_SUBDIRECTORY, BACKUP_FILE_POSTFIX, CALCULATED_CHECKSUM_FILE_POSTFIX
@@ -13,7 +14,7 @@ from ZfsBackupTool.SshHost import SshHost
 
 class CommandExecutionError(Exception):
 
-    def __init__(self, sub_process: subprocess.Popen, *args):
+    def __init__(self, sub_process: Popen, *args):
         super().__init__(*args)
         self.sub_process = sub_process
 
@@ -21,21 +22,25 @@ class CommandExecutionError(Exception):
 class PipePrinterThread(threading.Thread):
     def __init__(self, pipe: IO[bytes], output: IO[bytes], row_index: int, write_lock: threading.Lock,
                  separator: bytes = b'\r'):
-        super().__init__()
+        super().__init__(daemon=True)
         self.pipe: IO[bytes] = pipe
         self.output = output
         self.row_index = row_index
         self.write_lock = write_lock
         self.separator = separator
+        self._aborted = False
+
+    def abort(self):
+        self._aborted = True
 
     def run(self):
         buffer: bytes = b''
         while True:  # until EOF
             chunk: bytes = self.pipe.read(1)  # I propose 4096 or so
-            # print("CHUNK", repr(chunk))
-            if not chunk:  # EOF?
+            if self._aborted:
+                return
+            if not chunk:  # EOF
                 with self.write_lock:
-                    # print("EOF", repr(buffer))
                     if self.row_index:
                         self.output.write('\033[{}A'.format(self.row_index).encode('utf-8'))
                     self.output.write(
@@ -55,7 +60,6 @@ class PipePrinterThread(threading.Thread):
                     break
                 else:
                     with self.write_lock:
-                        # print("PART", repr(part))
                         if self.row_index:
                             self.output.write('\033[{}A'.format(self.row_index).encode('utf-8'))
                         self.output.write(part)
@@ -76,7 +80,7 @@ class ShellCommand(object):
         self.remote = remote
 
     def _execute(self, command: str, capture_output: bool, capture_stdout=True, capture_stderr=True,
-                 dev_null_output=False, no_wait: bool = False) -> subprocess.Popen:
+                 dev_null_output=False, no_wait: bool = False) -> Popen:
         if capture_output and dev_null_output:
             raise ValueError("capture_output and dev_null_output cannot be used together")
         if self.echo_cmd:
@@ -90,10 +94,14 @@ class ShellCommand(object):
                 stderr = subprocess.PIPE
             else:
                 stderr = None
-            sub_process = subprocess.Popen(command, shell=True, stdout=stdout, stderr=stderr,
+            sub_process = subprocess.Popen(command, shell=True,
+                                           stdout=stdout, stderr=stderr,
+                                           stdin=subprocess.DEVNULL,
                                            executable="/bin/bash")
         elif dev_null_output:
-            sub_process = subprocess.Popen(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            sub_process = subprocess.Popen(command, shell=True,
+                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                           stdin=subprocess.DEVNULL,
                                            executable="/bin/bash")
         else:
             sub_process = subprocess.Popen(command, shell=True, executable="/bin/bash")
@@ -103,11 +111,13 @@ class ShellCommand(object):
                 if capture_output and capture_stderr:
                     stderr_data = sub_process.stderr.read().decode('utf-8') if sub_process.stderr else ""
                     raise CommandExecutionError(sub_process, "Error executing command > {} <\n{}".format(
-                        command, stderr_data))
-                raise CommandExecutionError(sub_process, "Error executing command > {} <".format(command))
+                        str(sub_process.args), stderr_data))
+                raise CommandExecutionError(sub_process, "Error executing command > {} <".format(
+                    str(sub_process.args)))
         return sub_process
 
-    def _get_ssh_command(self, remote: SshHost):
+    @classmethod
+    def _get_ssh_command(cls, remote: SshHost):
         command = "ssh -o BatchMode=yes "
         if remote.key_path:
             command += '-i "{}"'.format(remote.key_path)
@@ -255,9 +265,7 @@ class ShellCommand(object):
             self._execute(command, capture_output=False)
             return tmp.read().decode('utf-8').strip().split(' ')[0]
 
-    def _target_get_checksum(self, output_dict: Dict[str, str], access_lock: threading.Lock,
-                             source_dataset: str, next_snapshot: str, target_path: str, target_index: int,
-                             ) -> None:
+    def _target_get_checksum(self, source_dataset: str, next_snapshot: str, target_path: str) -> tuple[Popen, str]:
         if self.remote:
             command = self._get_ssh_command(self.remote)
             checksum_command = 'pv {} --name "{}" --cursor "{}"'.format(
@@ -281,46 +289,60 @@ class ShellCommand(object):
 
         sub_process = self._execute(command, capture_output=True, capture_stdout=False, capture_stderr=True,
                                     no_wait=True)
-        stderr_printer = PipePrinterThread(cast(IO[bytes], sub_process.stderr), sys.stderr.buffer, target_index,
-                                           access_lock)
-        stderr_printer.start()
 
-        sub_process.wait()
-        stderr_printer.join()
-        if sub_process.returncode != 0:
-            raise CommandExecutionError(sub_process, "Error executing command > {} <".format(command))
-
-        checksum_file = os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
-                                     next_snapshot + BACKUP_FILE_POSTFIX + CALCULATED_CHECKSUM_FILE_POSTFIX)
-        checksum = self.target_read_checksum_from_file(checksum_file)
-        with access_lock:
-            output_dict[target_path] = checksum
+        return sub_process, command
 
     def target_get_checksums(self, source_dataset: str, next_snapshot: str, target_paths: Set[str]):
-        threads = []
         output_dict: Dict[str, str] = {}
-        access_lock = threading.Lock()
+        print_lock = threading.Lock()
 
         sys.stderr.flush()
+
+        target_process_printer_mapping: Dict[str, Tuple[Popen, PipePrinterThread]] = {}
 
         for target_index, target_path in enumerate(sorted(target_paths)):
-            thread = threading.Thread(target=self._target_get_checksum,
-                                      args=(output_dict, access_lock, source_dataset, next_snapshot,
-                                            target_path, target_index),
-                                      daemon=True)
-            threads.append(thread)
-
+            pv_process, command = self._target_get_checksum(source_dataset, next_snapshot, target_path)
+            stderr_printer = PipePrinterThread(cast(IO[bytes], pv_process.stderr), sys.stderr.buffer, target_index,
+                                               print_lock)
             if target_index > 0:
                 sys.stderr.write('\n\r')
+
+            target_process_printer_mapping[target_path] = (pv_process, stderr_printer)
+
         sys.stderr.flush()
 
-        for i, thread in enumerate(threads):
-            thread.start()
-        for thread in threads:
-            thread.join()
+        # start printer threads
+        for _, stderr_printer in target_process_printer_mapping.values():
+            stderr_printer.start()
 
-        sys.stderr.write('\n\r')
-        sys.stderr.flush()
+        try:
+            # wait for all processes to finish
+            for pv_process, _ in target_process_printer_mapping.values():
+                pv_process.wait()
+        except KeyboardInterrupt:
+            # abort all printer threads
+            for _, stderr_printer in target_process_printer_mapping.values():
+                stderr_printer.abort()
+            # kill all processes
+            for pv_process, _ in target_process_printer_mapping.values():
+                pv_process.kill()
+            # and wait for them to terminate
+            for pv_process, _ in target_process_printer_mapping.values():
+                pv_process.wait()
+            raise
+        finally:
+            sys.stderr.write('\n\r')
+            sys.stderr.flush()
+
+        for target_path, (pv_process, stderr_printer) in target_process_printer_mapping.items():
+            stderr_printer.join()
+            if pv_process.returncode != 0:
+                raise CommandExecutionError(pv_process, "Error executing command > {} <".format(str(pv_process.args)))
+
+            checksum_file = os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
+                                         next_snapshot + BACKUP_FILE_POSTFIX + CALCULATED_CHECKSUM_FILE_POSTFIX)
+            checksum = self.target_read_checksum_from_file(checksum_file)
+            output_dict[target_path] = checksum
 
         return output_dict
 
