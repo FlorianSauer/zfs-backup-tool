@@ -62,6 +62,8 @@ class ZfsBackupTool(object):
                                help='Re-create backups only for missing snapshots. '
                                     'Skips creation of a new incremental backup. '
                                     'Useful for resuming previously aborted backup runs.')
+    backup_parser.add_argument('-f', '--filter',
+                               help='Create new backups only for datasets starting with given filter.')
     backup_parser.add_argument('--skip-repaired-datasets', action='store_true',
                                help='Will not create new backup snapshots on a dataset if the incremental base was '
                                     'missing and re-created on any target. '
@@ -365,6 +367,8 @@ class ZfsBackupTool(object):
         if self.cli_args.new or self.cli_args.clean:
             for source in selected_sources:
                 for dataset in source.get_matching_datasets():
+                    if self.cli_args.filter and not dataset.zfs_path.startswith(self.cli_args.filter):
+                        continue
                     for snapshot in dataset.get_backup_snapshots(self.config.snapshot_prefix):
                         print("Deleting snapshot {}@{}...".format(dataset.zfs_path, snapshot))
                         dataset.delete_snapshot(snapshot)
@@ -379,6 +383,8 @@ class ZfsBackupTool(object):
         if not self.cli_args.new:
             for source in selected_sources:
                 for dataset in source.get_matching_datasets():
+                    if self.cli_args.filter and not dataset.zfs_path.startswith(self.cli_args.filter):
+                        continue
                     recreated = self._do_recreate_missing_backups(
                         dataset.zfs_path,
                         dataset.get_backup_snapshots(self.config.snapshot_prefix),
@@ -393,6 +399,8 @@ class ZfsBackupTool(object):
         dataset_snapshot_names: Dict[str, Tuple[Optional[str], str]] = {}
         for source in selected_sources:
             for dataset in source.get_matching_datasets():
+                if self.cli_args.filter and not dataset.zfs_path.startswith(self.cli_args.filter):
+                    continue
                 if (not dataset.has_initial_backup_snapshot(self.config.snapshot_prefix)
                         and not dataset.has_intermediate_backup_snapshots(self.config.snapshot_prefix)):
                     print("No initial snapshot found for dataset {}".format(dataset.zfs_path))
@@ -428,6 +436,8 @@ class ZfsBackupTool(object):
         # region transmit backup as bulk operation
         for source in selected_sources:
             for dataset in source.get_matching_datasets():
+                if self.cli_args.filter and not dataset.zfs_path.startswith(self.cli_args.filter):
+                    continue
                 if dataset.zfs_path in dataset_snapshot_names:
                     previous_snapshot, next_snapshot = dataset_snapshot_names[dataset.zfs_path]
                     self._do_backup(source.get_all_target_paths(self.cli_args.target_filter),
