@@ -296,6 +296,7 @@ class ShellCommand(object):
         output_dict: Dict[str, str] = {}
         print_lock = threading.Lock()
 
+        sys.stdout.flush()
         sys.stderr.flush()
 
         target_process_printer_mapping: Dict[str, Tuple[Popen, PipePrinterThread]] = {}
@@ -309,6 +310,7 @@ class ShellCommand(object):
 
             target_process_printer_mapping[target_path] = (pv_process, stderr_printer)
 
+        sys.stdout.flush()
         sys.stderr.flush()
 
         # start printer threads
@@ -332,6 +334,7 @@ class ShellCommand(object):
             raise
         finally:
             sys.stderr.write('\n\r')
+            sys.stdout.flush()
             sys.stderr.flush()
 
         for target_path, (pv_process, stderr_printer) in target_process_printer_mapping.items():
