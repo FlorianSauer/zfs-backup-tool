@@ -262,10 +262,14 @@ class ShellCommand(object):
                                             for path in sorted(target_paths))
                 command += ' | tee {} > /dev/null'.format(tee_quoted_paths)
 
+            sys.stdout.flush()
+            sys.stderr.flush()
             self._execute(command, capture_output=False)
+            sys.stdout.flush()
+            sys.stderr.flush()
             return tmp.read().decode('utf-8').strip().split(' ')[0]
 
-    def _target_get_checksum(self, source_dataset: str, next_snapshot: str, target_path: str) -> tuple[Popen, str]:
+    def _target_get_checksum(self, source_dataset: str, next_snapshot: str, target_path: str) -> Tuple[Popen, str]:
         if self.remote:
             command = self._get_ssh_command(self.remote)
             checksum_command = 'pv {} --name "{}" --cursor "{}"'.format(
