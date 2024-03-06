@@ -1,10 +1,9 @@
 import os
-from typing import List, Optional
+from typing import List
 
 from .CliInterface import CliInterface
 from .Constants import TARGET_SUBDIRECTORY, INITIALIZED_FILE_NAME
 from .ShellCommand import ShellCommand
-from .SshHost import SshHost
 
 
 class TargetGroup(CliInterface):
@@ -14,9 +13,9 @@ class TargetGroup(CliInterface):
         self.paths = paths
         self.name = name
 
-    def is_initialized(self, remote: Optional[SshHost] = None) -> bool:
+    def is_initialized(self) -> bool:
         for target in self.paths:
-            if not self.shell_command.target_file_exists(os.path.join(target, TARGET_SUBDIRECTORY, INITIALIZED_FILE_NAME),
-                                                         remote):
+            if not self.shell_command.target_file_exists(
+                    os.path.join(target, TARGET_SUBDIRECTORY, INITIALIZED_FILE_NAME)):
                 return False
         return True

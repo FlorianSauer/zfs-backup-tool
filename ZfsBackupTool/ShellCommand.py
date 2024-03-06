@@ -189,7 +189,7 @@ class ShellCommand(object):
         try:
             self._execute(command, capture_output=True)
         except CommandExecutionError as e:
-            print("Program '{}' not installed".format(program), file=sys.stderr)
+            print("Program '{}' not installed".format(program))
             stderr_data = e.sub_process.stderr.read().decode('utf-8') if e.sub_process.stderr else ""
             print(stderr_data, file=sys.stderr)
             sys.exit(1)
