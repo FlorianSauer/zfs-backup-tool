@@ -129,7 +129,8 @@ class BackupGroupPlanner(object):
 
             if not remaining_dataset_size:
                 print("All datasets mapped to disk. Skipping remaining disks.")
-                break
+                print("=========================================")
+                return
 
         print("=========================================")
         print("=========================================")
