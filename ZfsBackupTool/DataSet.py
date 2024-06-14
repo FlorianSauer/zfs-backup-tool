@@ -13,6 +13,9 @@ class DataSet(CliInterface):
         self.target_paths = set(target_paths)
         self._snapshots: Optional[List[str]] = None
 
+    def get_dataset_size(self, including_childs: bool = False) -> int:
+        return self.shell_command.get_dataset_size(self.zfs_path, including_childs)
+
     def __hash__(self):
         return hash(self.zfs_path)
 
