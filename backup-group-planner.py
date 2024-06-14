@@ -64,6 +64,7 @@ class BackupGroupPlanner(object):
         for dataset in self.cli_args.source_datasets:
             if dataset.endswith("*"):
                 dataset = dataset[:-1]
+                dataset = dataset[:-1] if dataset.endswith("/") else dataset
                 source_datasets.extend(self.shell_command.get_datasets(dataset, recursive=True))
             else:
                 source_datasets.extend(self.shell_command.get_datasets(dataset, recursive=False))
