@@ -106,7 +106,7 @@ class BackupGroupPlanner(object):
                 print("Dataset sizes:")
                 print(repr(dataset_size_dict))
                 print("Packed packets:")
-                packets_dict = [{k.zfs_path: v for k, v in d.items()} for d in e.packets]
+                packets_dict = [{k.zfs_path: v for k, v in d.items()} for d in packets]
                 print(repr(packets_dict))
             print("Packet content:")
             for fragment, size in sorted(packets[0].items(), key=lambda x: x[0].zfs_path):
