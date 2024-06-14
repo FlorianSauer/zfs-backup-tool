@@ -125,7 +125,7 @@ class BackupGroupPlanner(object):
             print("Disk size: ", disk_size)
             print("Usage size:", usage_size)
             print("Disk free size:", disk_size - usage_size)
-            print("Disk free percentage:", "{:.2f}%".format((usage_size / disk_size) * 100))
+            print("Disk free percentage:", "{:.2f}%".format(100 - ((usage_size / disk_size) * 100)))
 
             if not remaining_dataset_size:
                 print("All datasets mapped to disk. Skipping remaining disks.")
