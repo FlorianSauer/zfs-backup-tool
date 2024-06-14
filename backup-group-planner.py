@@ -117,6 +117,8 @@ class BackupGroupPlanner(object):
 
             print("Disk size: ", disk_size)
             print("Usage size:", usage_size)
+            print("Disk free size:", disk_size - usage_size)
+            print("Disk free percentage:", usage_size / disk_size)
 
         print("=========================================")
         print("=========================================")
