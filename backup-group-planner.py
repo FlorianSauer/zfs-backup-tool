@@ -101,6 +101,13 @@ class BackupGroupPlanner(object):
                 print(e)
                 print("Try to lower the disk_free_percentage or increase the disk size.")
                 sys.exit(1)
+            if self.cli_args.debug:
+                dataset_size_dict = {dataset.zfs_path: dataset.get_dataset_size() for dataset in datasets}
+                print("Dataset sizes:")
+                print(repr(dataset_size_dict))
+                print("Packed packets:")
+                packets_dict = [{k.zfs_path: v for k, v in d.items()} for d in e.packets]
+                print(repr(packets_dict))
             print("Packet content:")
             for fragment, size in sorted(packets[0].items(), key=lambda x: x[0].zfs_path):
                 print("  {}: {}".format(fragment.zfs_path, size))
