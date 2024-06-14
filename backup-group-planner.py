@@ -88,7 +88,10 @@ class BackupGroupPlanner(object):
                 packets = packer.getFragmentPackets(disk_size - int((disk_size * disk_free_percentage)), datasets)
             except PackingError as e:
                 if self.cli_args.debug:
+                    print("Dataset sizes:")
                     print(repr({dataset.zfs_path: dataset.get_dataset_size() for dataset in datasets}))
+                    print("Packed packets:")
+                    print(repr(e.packets))
                 print(e)
                 print("Try to lower the disk_free_percentage or increase the disk size.")
                 sys.exit(1)

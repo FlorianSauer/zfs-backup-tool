@@ -22,8 +22,9 @@ class ResourcePacker(object):
         else:
             raise NotImplementedError
         if any(sum(packet.values()) > resource_size for packet in packets):
-            raise PackingError(
-                'Unable to form packets that do not exceed the given resource size of {}'.format(resource_size))
+            raise PackingError(packets,
+                               'Unable to form packets that do not exceed the given resource size of {}'.format(
+                                   resource_size))
         return sorted(packets, key=lambda packet: sum(packet.values()), reverse=True)
 
     def checkPackagesReachMinimumFillLevel(self, packets, resource_size, minimum_fill_level):
@@ -69,4 +70,6 @@ class ResourcePacker(object):
 
 
 class PackingError(Exception):
-    pass
+    def __init__(self, packets: list, message: str):
+        super(PackingError, self).__init__(message)
+        self.packets = packets
