@@ -82,14 +82,14 @@ class BackupGroupPlanner(object):
         for i, label in enumerate(disk_priorities):
             disk_size = disk_sizes_with_labels[label]
             disk_is_smallest_disk = disk_size == min(disk_sizes_with_labels.values())
-            disk_is_smallest_and_last_disk = disk_is_smallest_disk and i == len(disk_priorities) - 1
+            disk_is_not_smallest_and_last_disk = not (disk_is_smallest_disk and i == len(disk_priorities) - 1)
             print("=========================================")
             print("Disk:", label)
             usage_size = 0
             try:
                 packets = packer.getFragmentPackets(disk_size - int((disk_size * disk_free_percentage)),
                                                     datasets,
-                                                    allow_oversized=disk_is_smallest_and_last_disk)
+                                                    allow_oversized=disk_is_not_smallest_and_last_disk)
             except PackingError as e:
                 if self.cli_args.debug:
                     dataset_size_dict = {dataset.zfs_path: dataset.get_dataset_size() for dataset in datasets}
