@@ -13,15 +13,15 @@ class ResourcePacker(object):
         # type: (int) -> None
         self.packing_method = packing_method
 
-    def getFragmentPackets(self, resource_size, fragments):
-        # type: (int, Iterable[DataSet]) -> List[Dict[DataSet, int]]
+    def getFragmentPackets(self, resource_size: int, fragments: Iterable[DataSet], allow_oversized: bool=False
+                           ) -> List[Dict[DataSet, int]]:
         if self.packing_method == self.BIN_PACKING:
             packets = self._get_binpacked_resources(resource_size, fragments)
         elif self.packing_method == self.FILLING:
             packets = self._get_sequential_filled_resources(resource_size, fragments)
         else:
             raise NotImplementedError
-        if any(sum(packet.values()) > resource_size for packet in packets):
+        if not allow_oversized and any(sum(packet.values()) > resource_size for packet in packets):
             raise PackingError(packets,
                                'Unable to form packets that do not exceed the given resource size of {}'.format(
                                    resource_size))
