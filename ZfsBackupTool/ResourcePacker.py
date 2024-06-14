@@ -16,7 +16,6 @@ class ResourcePacker(object):
     def getFragmentPackets(self, resource_size, fragments):
         # type: (int, Iterable[DataSet]) -> List[Dict[DataSet, int]]
         if self.packing_method == self.BIN_PACKING:
-
             packets = self._get_binpacked_resources(resource_size, fragments)
         elif self.packing_method == self.FILLING:
             packets = self._get_sequential_filled_resources(resource_size, fragments)

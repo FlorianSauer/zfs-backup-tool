@@ -2,7 +2,7 @@ import argparse
 import sys
 
 from ZfsBackupTool.DataSet import DataSet
-from ZfsBackupTool.ResourcePacker import ResourcePacker
+from ZfsBackupTool.ResourcePacker import ResourcePacker, PackingError
 from ZfsBackupTool.ShellCommand import ShellCommand
 
 
@@ -84,10 +84,17 @@ class BackupGroupPlanner(object):
             print("=========================================")
             print("Disk:", label)
             usage_size = 0
-            packets = packer.getFragmentPackets(disk_size - int((disk_size * disk_free_percentage)), datasets)
+            try:
+                packets = packer.getFragmentPackets(disk_size - int((disk_size * disk_free_percentage)), datasets)
+            except PackingError as e:
+                if self.cli_args.debug:
+                    print(repr({dataset.zfs_path: dataset.get_dataset_size() for dataset in datasets}))
+                print(e)
+                print("Try to lower the disk_free_percentage or increase the disk size.")
+                sys.exit(1)
             print("Packet content:")
             for fragment, size in sorted(packets[0].items(), key=lambda x: x[0].zfs_path):
-                print(f"  {fragment.zfs_path}: {size}")
+                print("  {}: {}".format(fragment.zfs_path, size))
                 usage_size += size
                 datasets.remove(fragment)
 
