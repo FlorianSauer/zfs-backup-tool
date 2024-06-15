@@ -131,7 +131,7 @@ class BackupGroupPlanner(object):
                     f.write("[Source {}]\n".format(
                         ",".join([dataset.zfs_path
                                   for dataset in sorted(packets[0].keys(), key=lambda x: x.zfs_path)])))
-                    f.write("source = {}]\n".format(
+                    f.write("source = {}\n".format(
                         ", ".join([dataset.zfs_path
                                   for dataset in sorted(packets[0].keys(), key=lambda x: x.zfs_path)])))
                     f.write("target = {}\n".format(label))
