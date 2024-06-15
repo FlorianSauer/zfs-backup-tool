@@ -119,24 +119,26 @@ class BackupGroupPlanner(object):
                 print("Packed packets:")
                 packets_dict = [{k.zfs_path: v for k, v in d.items()} for d in packets]
                 print(repr(packets_dict))
-            print("Packet content:")
-            for fragment, size in sorted(packets[0].items(), key=lambda x: x[0].zfs_path):
-                print("  {}: {}".format(fragment.zfs_path, size))
-                usage_size += size
-                datasets.remove(fragment)
 
-            if self.cli_args.write_config:
-                # append Source section
-                with open(self.cli_args.write_config, "a") as f:
-                    f.write("[Source {}]\n".format(
-                        ",".join([dataset.zfs_path
-                                  for dataset in sorted(packets[0].keys(), key=lambda x: x.zfs_path)])))
-                    f.write("source = {}\n".format(
-                        ", ".join([dataset.zfs_path
-                                  for dataset in sorted(packets[0].keys(), key=lambda x: x.zfs_path)])))
-                    f.write("target = {}\n".format(label))
-                    f.write("recursive = False\n")
-                    f.write("\n")
+            if packets:
+                print("Packet content:")
+                for fragment, size in sorted(packets[0].items(), key=lambda x: x[0].zfs_path):
+                    print("  {}: {}".format(fragment.zfs_path, size))
+                    usage_size += size
+                    datasets.remove(fragment)
+
+                if self.cli_args.write_config:
+                    # append Source section
+                    with open(self.cli_args.write_config, "a") as f:
+                        f.write("[Source {}]\n".format(
+                            ",".join([dataset.zfs_path
+                                      for dataset in sorted(packets[0].keys(), key=lambda x: x.zfs_path)])))
+                        f.write("source = {}\n".format(
+                            ", ".join([dataset.zfs_path
+                                      for dataset in sorted(packets[0].keys(), key=lambda x: x.zfs_path)])))
+                        f.write("target = {}\n".format(label))
+                        f.write("recursive = False\n")
+                        f.write("\n")
 
             remaining_dataset_size = sum([dataset.get_dataset_size() for dataset in datasets])
             if remaining_dataset_size + usage_size < disk_size:
