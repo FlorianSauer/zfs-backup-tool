@@ -29,6 +29,8 @@ class BackupGroupPlanner(object):
                                  "1: Filling "
                                  "2: Bin packing "
                                  "Default: 1")
+    cli_parser.add_argument('--write-config', type=str, metavar="gen_config_file_path",
+                            help="Generate a config file and write it to the specified path.")
 
     # add positional argument to specify multiple source datasets
     cli_parser.add_argument("source_datasets", nargs="+",
@@ -79,6 +81,13 @@ class BackupGroupPlanner(object):
         for source_dataset in source_datasets:
             datasets.append(DataSet(self.shell_command, source_dataset, set()))
 
+        if self.cli_args.gen_config_file_path:
+            # write Target-Group section for each disk
+            with open(self.cli_args.gen_config_file_path, "w") as f:
+                for disk in disk_priorities:
+                    f.write("[Target-Group {}]\n".format(disk))
+                    f.write("path = /mnt/{}\n".format(disk))
+
         for i, label in enumerate(disk_priorities):
             disk_size = disk_sizes_with_labels[label]
             disk_is_smallest_disk = disk_size == min(disk_sizes_with_labels.values())
@@ -113,6 +122,18 @@ class BackupGroupPlanner(object):
                 print("  {}: {}".format(fragment.zfs_path, size))
                 usage_size += size
                 datasets.remove(fragment)
+
+            if self.cli_args.gen_config_file_path:
+                # append Source section
+                with open(self.cli_args.gen_config_file_path, "a") as f:
+                    f.write("[Source {}]\n".format(
+                        ",".join([dataset.zfs_path
+                                  for dataset in sorted(packets[0].keys(), key=lambda x: x.zfs_path)])))
+                    f.write("source = {}]\n".format(
+                        ", ".join([dataset.zfs_path
+                                  for dataset in sorted(packets[0].keys(), key=lambda x: x.zfs_path)])))
+                    f.write("target = {}\n".format(label))
+                    f.write("recursive = False\n")
 
             remaining_dataset_size = sum([dataset.get_dataset_size() for dataset in datasets])
             if remaining_dataset_size + usage_size < disk_size:
