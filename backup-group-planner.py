@@ -87,6 +87,8 @@ class BackupGroupPlanner(object):
                 for disk in disk_priorities:
                     f.write("[Target-Group {}]\n".format(disk))
                     f.write("path = /mnt/{}\n".format(disk))
+                    f.write("\n")
+                f.write("\n")
 
         for i, label in enumerate(disk_priorities):
             disk_size = disk_sizes_with_labels[label]
