@@ -29,7 +29,7 @@ class BackupGroupPlanner(object):
                                  "1: Filling "
                                  "2: Bin packing "
                                  "Default: 1")
-    cli_parser.add_argument('--write-config', type=str, metavar="gen_config_file_path",
+    cli_parser.add_argument('--write-config', type=str,
                             help="Generate a config file and write it to the specified path.")
 
     # add positional argument to specify multiple source datasets
@@ -81,9 +81,9 @@ class BackupGroupPlanner(object):
         for source_dataset in source_datasets:
             datasets.append(DataSet(self.shell_command, source_dataset, set()))
 
-        if self.cli_args.gen_config_file_path:
+        if self.cli_args.write_config:
             # write Target-Group section for each disk
-            with open(self.cli_args.gen_config_file_path, "w") as f:
+            with open(self.cli_args.write_config, "w") as f:
                 for disk in disk_priorities:
                     f.write("[Target-Group {}]\n".format(disk))
                     f.write("path = /mnt/{}\n".format(disk))
@@ -123,9 +123,9 @@ class BackupGroupPlanner(object):
                 usage_size += size
                 datasets.remove(fragment)
 
-            if self.cli_args.gen_config_file_path:
+            if self.cli_args.write_config:
                 # append Source section
-                with open(self.cli_args.gen_config_file_path, "a") as f:
+                with open(self.cli_args.write_config, "a") as f:
                     f.write("[Source {}]\n".format(
                         ",".join([dataset.zfs_path
                                   for dataset in sorted(packets[0].keys(), key=lambda x: x.zfs_path)])))
