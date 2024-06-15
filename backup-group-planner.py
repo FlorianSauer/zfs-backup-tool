@@ -134,6 +134,7 @@ class BackupGroupPlanner(object):
                                   for dataset in sorted(packets[0].keys(), key=lambda x: x.zfs_path)])))
                     f.write("target = {}\n".format(label))
                     f.write("recursive = False\n")
+                    f.write("\n")
 
             remaining_dataset_size = sum([dataset.get_dataset_size() for dataset in datasets])
             if remaining_dataset_size + usage_size < disk_size:
