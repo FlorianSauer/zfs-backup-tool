@@ -54,17 +54,28 @@ class ResourcePacker(object):
 
     def _get_sequential_filled_resources(self, resource_size, fragments):
         # type: (int, Iterable[DataSet]) -> List[Dict[DataSet, int]]
+        datasets_sizes = {f: f.get_dataset_size() for f in fragments}
+
         buckets = []
-        new_bucket = OrderedDict()
-        new_bucket_size = 0
-        for fragment in fragments:
-            if new_bucket_size + fragment.get_dataset_size() > resource_size:
-                buckets.append(new_bucket)
-                new_bucket = OrderedDict()
-                new_bucket_size = 0
-            new_bucket[fragment] = fragment.get_dataset_size()
-            new_bucket_size += fragment.get_dataset_size()
-        if len(new_bucket):
+        while datasets_sizes:
+            # try to fill existing buckets
+            for bucket in buckets:
+                for fragment in datasets_sizes:
+                    if sum(bucket.values()) + datasets_sizes[fragment] <= resource_size:
+                        bucket[fragment] = datasets_sizes[fragment]
+                        del datasets_sizes[fragment]
+            # create new bucket
+            new_bucket = OrderedDict()
+            new_bucket_size = 0
+            for fragment in sorted(datasets_sizes, key=lambda x: datasets_sizes[x], reverse=True):
+                if new_bucket_size + datasets_sizes[fragment] > resource_size:
+                    continue
+                new_bucket[fragment] = datasets_sizes[fragment]
+                new_bucket_size += datasets_sizes[fragment]
+            if not new_bucket:
+                break
+            for fragment in new_bucket:
+                del datasets_sizes[fragment]
             buckets.append(new_bucket)
         return buckets
 
