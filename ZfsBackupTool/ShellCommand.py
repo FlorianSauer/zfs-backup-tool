@@ -362,6 +362,20 @@ class ShellCommand(object):
 
         return output_dict
 
+    def target_dir_exists(self, path: str):
+        if self.remote:
+            command = self._get_ssh_command(self.remote)
+            command += shlex.quote('test -f "{}"'.format(path))
+        else:
+            command = 'test -d "{}"'.format(path)
+        try:
+            sub_process = self._execute(command, capture_output=True)
+        except CommandExecutionError as e:
+            exit_code = e.sub_process.returncode
+        else:
+            exit_code = sub_process.returncode
+        return exit_code == 0
+
     def target_file_exists(self, path: str):
         if self.remote:
             command = self._get_ssh_command(self.remote)
