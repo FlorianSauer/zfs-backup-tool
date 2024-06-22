@@ -174,6 +174,15 @@ class ShellCommand(object):
             exit_code = sub_process.returncode
         return exit_code == 0
 
+    def get_dataset_size(self, dataset: str, recursive: bool) -> int:
+        command = 'zfs list -p -H -o refer'
+        if recursive:
+            command += " -r"
+        command += ' "{}"'.format(dataset)
+        sub_process = self._execute(command, capture_output=True)
+        stdout_lines = sub_process.stdout.read().decode('utf-8').splitlines() if sub_process.stdout else []
+        return int(stdout_lines[0].strip())
+
     _NONE = cast(SshHost, object())
 
     def program_is_installed(self, program: str, remote: Optional[SshHost] = _NONE) -> bool:
@@ -352,6 +361,20 @@ class ShellCommand(object):
             output_dict[target_path] = checksum
 
         return output_dict
+
+    def target_dir_exists(self, path: str):
+        if self.remote:
+            command = self._get_ssh_command(self.remote)
+            command += shlex.quote('test -f "{}"'.format(path))
+        else:
+            command = 'test -d "{}"'.format(path)
+        try:
+            sub_process = self._execute(command, capture_output=True)
+        except CommandExecutionError as e:
+            exit_code = e.sub_process.returncode
+        else:
+            exit_code = sub_process.returncode
+        return exit_code == 0
 
     def target_file_exists(self, path: str):
         if self.remote:

@@ -45,10 +45,14 @@ class TargetDataSet(CliInterface):
             self._snapshots = None
         if self._snapshots is None:
             for target_path in self.target_paths:
-                files, directories = self.shell_command.target_list_directory(
-                    os.path.join(target_path, TARGET_SUBDIRECTORY, self.zfs_path))
-                self._snapshots = [f.replace(BACKUP_FILE_POSTFIX, '')
-                                   for f in files if f.endswith(BACKUP_FILE_POSTFIX)]
+                if not self.shell_command.target_dir_exists(
+                        os.path.join(target_path, TARGET_SUBDIRECTORY, self.zfs_path)):
+                    self._snapshots = []
+                else:
+                    files, directories = self.shell_command.target_list_directory(
+                        os.path.join(target_path, TARGET_SUBDIRECTORY, self.zfs_path))
+                    self._snapshots = [f.replace(BACKUP_FILE_POSTFIX, '')
+                                       for f in files if f.endswith(BACKUP_FILE_POSTFIX)]
         return self._snapshots  # type: ignore
 
     @classmethod
@@ -64,7 +68,7 @@ class TargetDataSet(CliInterface):
     def get_expected_backup_snapshots(self, snapshot_prefix: str) -> List[str]:
         highest_snapshot_number = self._get_highest_snapshot_number(snapshot_prefix)
         expected_snapshots = []
-        for snapshot_number in range(0, highest_snapshot_number+1):
+        for snapshot_number in range(0, highest_snapshot_number + 1):
             if snapshot_number == 0:
                 expected_snapshot = (snapshot_prefix
                                      + SNAPSHOT_PREFIX_POSTFIX_SEPARATOR
