@@ -7,11 +7,7 @@ from typing import List, Set, Optional, Tuple, Dict, Union
 
 from ZfsBackupTool.BackupSetup import BackupSetup
 from ZfsBackupTool.Config import TargetGroup, BackupSource
-from ZfsBackupTool.Constants import *
-from ZfsBackupTool.DataSet import DataSet
-from ZfsBackupTool.ShellCommand import ShellCommand, CommandExecutionError
-from ZfsBackupTool.SshHost import SshHost
-from ZfsBackupTool.TargetDataSet import TargetDataSet
+from ZfsBackupTool.ShellCommand import SshHost
 
 
 # region setup helper class for environment expanding in config file
@@ -184,15 +180,15 @@ class ZfsBackupTool(object):
                 return
         print("Initializing backup targets...")
         for target in self.config.get_all_target_paths():
-            self.shell_command.target_mkdir(os.path.join(target, TARGET_STORAGE_SUBDIRECTORY))
-            self.shell_command.target_write_to_file(os.path.join(target, TARGET_STORAGE_SUBDIRECTORY, INITIALIZED_FILE_NAME),
+            self.shell_command.target_mkdir(os.path.join(target, TARGET_SUBDIRECTORY))
+            self.shell_command.target_write_to_file(os.path.join(target, TARGET_SUBDIRECTORY, INITIALIZED_FILE_NAME),
                                                     "initialized")
 
     def _do_backup(self, target_paths: Set[str], source_dataset: str,
                    previous_snapshot: Optional[str], next_snapshot: str,
                    overwrite: bool = True):
         for target_path in target_paths:
-            self.shell_command.target_mkdir(os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, source_dataset))
+            self.shell_command.target_mkdir(os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset))
 
         skip_zfs_send = False
         skip_verification = False
@@ -201,14 +197,14 @@ class ZfsBackupTool(object):
         if not overwrite:
             remotes_have_snapshot_file = (
                 self.shell_command.target_file_exists(
-                    os.path.join(tp, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                    os.path.join(tp, TARGET_SUBDIRECTORY, source_dataset,
                                  next_snapshot + BACKUP_FILE_POSTFIX))
                 for tp in target_paths
             )
             if all(remotes_have_snapshot_file):
                 remotes_have_checksum_file = (
                     self.shell_command.target_file_exists(
-                        os.path.join(tp, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                        os.path.join(tp, TARGET_SUBDIRECTORY, source_dataset,
                                      next_snapshot + BACKUP_FILE_POSTFIX + CHECKSUM_FILE_POSTFIX))
                     for tp in target_paths
                 )
@@ -222,7 +218,7 @@ class ZfsBackupTool(object):
 
                     remotes_have_temporary_checksum_file = (
                         self.shell_command.target_file_exists(
-                            os.path.join(tp, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                            os.path.join(tp, TARGET_SUBDIRECTORY, source_dataset,
                                          next_snapshot + BACKUP_FILE_POSTFIX + EXPECTED_CHECKSUM_FILE_POSTFIX))
                         for tp in target_paths
                     )
@@ -230,7 +226,7 @@ class ZfsBackupTool(object):
                         for target_path in target_paths:
                             try:
                                 backup_checksum = self.shell_command.target_read_checksum_from_file(
-                                    os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                                    os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
                                                  next_snapshot + BACKUP_FILE_POSTFIX + EXPECTED_CHECKSUM_FILE_POSTFIX))
                             except CommandExecutionError:
                                 pass
@@ -259,7 +255,7 @@ class ZfsBackupTool(object):
             # it gets replaced later by the 'final' checksum file
             for target_path in target_paths:
                 self.shell_command.target_write_to_file(
-                    os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                    os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
                                  next_snapshot + BACKUP_FILE_POSTFIX + EXPECTED_CHECKSUM_FILE_POSTFIX),
                     "{} ./{}".format(backup_checksum, next_snapshot + BACKUP_FILE_POSTFIX))
         else:
@@ -282,13 +278,13 @@ class ZfsBackupTool(object):
 
             for target_path in target_paths:
                 self.shell_command.target_write_to_file(
-                    os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                    os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
                                  next_snapshot + BACKUP_FILE_POSTFIX + CHECKSUM_FILE_POSTFIX),
                     "{} ./{}".format(backup_checksum, next_snapshot + BACKUP_FILE_POSTFIX))
 
         for target_path in target_paths:
             self.shell_command.target_remove_file(
-                os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
                              next_snapshot + BACKUP_FILE_POSTFIX + EXPECTED_CHECKSUM_FILE_POSTFIX))
 
     def _do_recreate_missing_backups(self, source_dataset: str, source_dataset_snapshots: List[str],
@@ -301,10 +297,10 @@ class ZfsBackupTool(object):
             # find missing/incomplete backups, backups are complete if they exist and have a checksum file
             for target_path in target_paths:
                 if not (self.shell_command.target_file_exists(
-                        os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                        os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
                                      snapshot + BACKUP_FILE_POSTFIX))
                         and self.shell_command.target_file_exists(
-                            os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                            os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
                                          snapshot + BACKUP_FILE_POSTFIX + CHECKSUM_FILE_POSTFIX))):
                     incomplete_targets.add(target_path)
             # process incomplete targets
@@ -454,7 +450,7 @@ class ZfsBackupTool(object):
                 print("Aborting...")
                 sys.exit(1)
             for target in targets:
-                backup_file = os.path.join(target, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                backup_file = os.path.join(target, TARGET_SUBDIRECTORY, source_dataset,
                                            snapshot + BACKUP_FILE_POSTFIX)
                 checksum_file = backup_file + CHECKSUM_FILE_POSTFIX
                 if not self.shell_command.target_file_exists(backup_file):
@@ -548,7 +544,7 @@ class ZfsBackupTool(object):
                     source_dataset))
                 return_val = False
             for target in targets:
-                backup_file = os.path.join(target, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                backup_file = os.path.join(target, TARGET_SUBDIRECTORY, source_dataset,
                                            snapshot + BACKUP_FILE_POSTFIX)
                 checksum_file = backup_file + CHECKSUM_FILE_POSTFIX
                 if not self.shell_command.target_file_exists(backup_file):
@@ -576,7 +572,7 @@ class ZfsBackupTool(object):
             target_expected_checksums = {}
             for target in snapshot_sources[snapshot]:
                 target_expected_checksums[target] = self.shell_command.target_read_checksum_from_file(
-                    os.path.join(target, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                    os.path.join(target, TARGET_SUBDIRECTORY, source_dataset,
                                  snapshot + BACKUP_FILE_POSTFIX + CHECKSUM_FILE_POSTFIX))
 
             if len(set(target_expected_checksums.values())) != 1:
@@ -591,7 +587,7 @@ class ZfsBackupTool(object):
                         print("Removing checksum file from target {} to trigger re-creation of backup files".format(
                             target_path))
                         self.shell_command.target_remove_file(
-                            os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                            os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
                                          snapshot + BACKUP_FILE_POSTFIX + CHECKSUM_FILE_POSTFIX))
                 return_val = False
                 continue
@@ -623,7 +619,7 @@ class ZfsBackupTool(object):
                             print("       Removing checksum file from target {} to trigger re-creation of backup files"
                                   .format(target_path))
                             self.shell_command.target_remove_file(
-                                str(os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                                str(os.path.join(target_path, TARGET_SUBDIRECTORY, source_dataset,
                                                  snapshot + BACKUP_FILE_POSTFIX + CHECKSUM_FILE_POSTFIX)))
                         checksum_errors += 1
                     else:
@@ -775,14 +771,17 @@ class ZfsBackupTool(object):
                         raise ValueError("Remote '{}' not defined".format(parser.get(section, 'remote')))
                 else:
                     remote = None
-                target_group = TargetGroup(self._itemize_option(parser.get(section, 'path')),
-                                           remote)
+
                 if section.lower().startswith('target-group '):
-                    target_groups[section[len("target-group "):].strip()] = target_group
+                    target_group_name = section[len("target-group "):].strip()
                 elif section.lower().startswith('targetgroup '):
-                    target_groups[section[len("targetgroup "):].strip()] = target_group
+                    target_group_name = section[len("targetgroup "):].strip()
                 else:
-                    raise NotImplementedError()
+                    raise NotImplementedError("Invalid section name for target group")
+
+                target_group = TargetGroup(target_group_name, self._itemize_option(parser.get(section, 'path')),
+                                           remote)
+                target_groups[target_group_name] = target_group
 
         # parse BackupSource sections
         backup_sources = []
@@ -799,7 +798,8 @@ class ZfsBackupTool(object):
                         raise ValueError("ZFS source '{}' contains '@', sources must not aim at snapshots!".format(
                             source))
 
-                backup_sources.append(BackupSource(sources,
+                backup_sources.append(BackupSource(source_name,
+                                                   sources,
                                                    [target_groups[t] for t in targets],
                                                    parser.getboolean(section, 'recursive', fallback=False),
                                                    self._itemize_option(parser.get(section, 'exclude', fallback=None)),

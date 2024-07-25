@@ -3,7 +3,7 @@ from typing import List, Tuple, Optional, Set
 
 from ZfsBackupTool.CliInterface import CliInterface
 from ZfsBackupTool.Constants import SNAPSHOT_PREFIX_POSTFIX_SEPARATOR, INITIAL_SNAPSHOT_POSTFIX, BACKUP_FILE_POSTFIX, \
-    TARGET_SUBDIRECTORY
+    TARGET_STORAGE_SUBDIRECTORY
 from ZfsBackupTool.DataSet import DataSet
 from ZfsBackupTool.ShellCommand import ShellCommand
 
@@ -46,11 +46,11 @@ class TargetDataSet(CliInterface):
         if self._snapshots is None:
             for target_path in self.target_paths:
                 if not self.shell_command.target_dir_exists(
-                        os.path.join(target_path, TARGET_SUBDIRECTORY, self.zfs_path)):
+                        os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, self.zfs_path)):
                     self._snapshots = []
                 else:
                     files, directories = self.shell_command.target_list_directory(
-                        os.path.join(target_path, TARGET_SUBDIRECTORY, self.zfs_path))
+                        os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, self.zfs_path))
                     self._snapshots = [f.replace(BACKUP_FILE_POSTFIX, '')
                                        for f in files if f.endswith(BACKUP_FILE_POSTFIX)]
         return self._snapshots  # type: ignore

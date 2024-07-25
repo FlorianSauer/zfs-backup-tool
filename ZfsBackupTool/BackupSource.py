@@ -3,7 +3,7 @@ import re
 from typing import List, Optional, Set, Dict, Iterable
 
 from ZfsBackupTool.CliInterface import CliInterface
-from ZfsBackupTool.Constants import TARGET_SUBDIRECTORY
+from ZfsBackupTool.Constants import TARGET_STORAGE_SUBDIRECTORY
 from ZfsBackupTool.DataSet import DataSet
 from ZfsBackupTool.ShellCommand import ShellCommand, CommandExecutionError
 from ZfsBackupTool.TargetDataSet import TargetDataSet
@@ -109,7 +109,7 @@ class BackupSource(CliInterface):
         for zfs_path in self.zfs_source:
             for target_group in self.targets:
                 for target_path in target_group.paths:
-                    target_path_prefix = os.path.join(target_path, TARGET_SUBDIRECTORY) + os.path.sep
+                    target_path_prefix = os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY) + os.path.sep
                     target_dataset_dirs = self._get_directory_paths(os.path.join(target_path_prefix, zfs_path))
                     if not target_dataset_dirs:
                         continue
