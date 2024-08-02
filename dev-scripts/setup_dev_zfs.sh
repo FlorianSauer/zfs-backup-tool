@@ -32,4 +32,4 @@ chmod -R 777 /dev/shm/local_mirror_storage1
 chmod -R 777 /dev/shm/local_mirror_storage2
 
 (cd /tmp && git clone "http://git.lan:3000/fsauer/zfs-backup-tool.git")
-(cd /tmp/zfs-backup-tool && git checkout "v0.1.0")
+(cd /tmp/zfs-backup-tool && git checkout "v1.0.0")
