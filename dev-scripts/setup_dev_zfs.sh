@@ -38,10 +38,10 @@ chmod -R 777 /dev/shm/local_mirror_storage2
 # install old version of zfs-backup-tool for basic testing
 tmp_dir=$(mktemp -d)
 mkdir -p "$tmp_dir"
-(cd "/tmp/$tmp_dir" && git clone "http://git.lan:3000/fsauer/zfs-backup-tool.git")
-(cd "/tmp/$tmp_dir/zfs-backup-tool" && git checkout "v1.0.0")
+(cd "$tmp_dir" && git clone "http://git.lan:3000/fsauer/zfs-backup-tool.git")
+(cd "$tmp_dir/zfs-backup-tool" && git checkout "v1.0.0")
 
 # backup the dev pool completely 3 times
-(cd "/tmp/$tmp_dir/zfs-backup-tool" && ./zfs-backup-tool.sh "$SCRIPT_DIR/dev-scripts/dev_config_full_backup.conf" backup)
-(cd "/tmp/$tmp_dir/zfs-backup-tool" && ./zfs-backup-tool.sh "$SCRIPT_DIR/dev-scripts/dev_config_full_backup.conf" backup)
-(cd "/tmp/$tmp_dir/zfs-backup-tool" && ./zfs-backup-tool.sh "$SCRIPT_DIR/dev-scripts/dev_config_full_backup.conf" backup)
+(cd "$tmp_dir/zfs-backup-tool" && ./zfs-backup-tool.sh "$SCRIPT_DIR/dev-scripts/dev_config_full_backup.conf" backup)
+(cd "$tmp_dir/zfs-backup-tool" && ./zfs-backup-tool.sh "$SCRIPT_DIR/dev-scripts/dev_config_full_backup.conf" backup)
+(cd "$tmp_dir/zfs-backup-tool" && ./zfs-backup-tool.sh "$SCRIPT_DIR/dev-scripts/dev_config_full_backup.conf" backup)
