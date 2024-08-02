@@ -42,6 +42,6 @@ mkdir -p "$tmp_dir"
 (cd "$tmp_dir/zfs-backup-tool" && git checkout "v1.0.0")
 
 # backup the dev pool completely 3 times
-(cd "$tmp_dir/zfs-backup-tool" && ./zfs-backup-tool.sh "$SCRIPT_DIR/dev-scripts/dev_config_full_backup.conf" backup)
-(cd "$tmp_dir/zfs-backup-tool" && ./zfs-backup-tool.sh "$SCRIPT_DIR/dev-scripts/dev_config_full_backup.conf" backup)
-(cd "$tmp_dir/zfs-backup-tool" && ./zfs-backup-tool.sh "$SCRIPT_DIR/dev-scripts/dev_config_full_backup.conf" backup)
+(cd "$tmp_dir/zfs-backup-tool" && ./zfs-backup-tool.sh "$SCRIPT_DIR/dev_config_full_backup.conf" backup)
+(cd "$tmp_dir/zfs-backup-tool" && ./zfs-backup-tool.sh "$SCRIPT_DIR/dev_config_full_backup.conf" backup)
+(cd "$tmp_dir/zfs-backup-tool" && ./zfs-backup-tool.sh "$SCRIPT_DIR/dev_config_full_backup.conf" backup)
