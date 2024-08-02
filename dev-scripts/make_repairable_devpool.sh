@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 
+set -e
 
 zfs destroy -r devpool/dataset2/dataset2-1
 zfs list -H -o name -t snapshot devpool/dataset0 | grep 'devpool/dataset0@test-backup.*' | xargs -n1 zfs destroy
