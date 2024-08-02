@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 
-cd /dev/shm
-
 disk_0_file="/dev/shm/disk0"
 disk_1_file="/dev/shm/disk1"
 
@@ -25,3 +23,13 @@ zfs snapshot -r "devpool@initial_snapshot"
 echo "ZFS pool created"
 echo "for teardown run:"
 echo "sudo zpool destroy devpool && sudo rm -f \"$disk_0_file\" \"$disk_1_file\""
+
+mkdir -p "/dev/shm/local_mirror_storage1"
+mkdir -p "/dev/shm/local_mirror_storage2"
+
+# make sure the storage is writable
+chmod -R 777 /dev/shm/local_mirror_storage1
+chmod -R 777 /dev/shm/local_mirror_storage2
+
+(cd /tmp && git clone "http://git.lan:3000/fsauer/zfs-backup-tool.git")
+(cd /tmp/zfs-backup-tool && git checkout "v0.1.0")
