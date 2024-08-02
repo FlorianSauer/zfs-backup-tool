@@ -5,17 +5,17 @@ from typing import List, Set, Tuple, Optional, Dict
 from ZfsBackupTool.Config import BackupSource
 from .Constants import TARGET_STORAGE_SUBDIRECTORY, SNAPSHOT_PREFIX_POSTFIX_SEPARATOR
 from .ShellCommand import ShellCommand, SshHost
-from .Zfs import Pool, DataSet, Snapshot, scan_zfs_pools, scan_filebased_zfs_pools
+from .Zfs import Pool, DataSet, Snapshot, scan_zfs_pools, scan_filebased_zfs_pools, PoolList
 
 
 class BackupSetup(object):
     EXPECTED_CHECKSUM_POSTFIX = ".sha256"
     CALCULATED_CHECKSUM_POSTFIX = ".calculated_sha256"
 
-    def __init__(self, sources: List[BackupSource], snapshot_prefix: str = None,
+    def __init__(self, sources: Set[BackupSource], snapshot_prefix: str = None,
                  include_intermediate_snapshots: bool = False,
                  target_path_prefix: str = None):
-        self.sources = sources
+        self.sources = {source.name: source for source in sources}
         self._sources_regex_include = {}
         self._sources_regex_exclude = {}
         for source in sources:
@@ -26,13 +26,13 @@ class BackupSetup(object):
 
     def get_all_target_paths(self) -> Set[str]:
         paths = []
-        for source in self.sources:
+        for source in self.sources.values():
             for target in source.targets:
                 paths.extend(target.target_paths)
         return set(paths)
 
     def dataset_matches_sources(self, dataset: DataSet) -> bool:
-        for source in self.sources:
+        for source in self.sources.values():
             if self.dataset_matches_source(dataset, source):
                 return True
         return False
@@ -51,23 +51,16 @@ class BackupSetup(object):
                     return True
         return dataset_zfs_path in source.source_datasets
 
-    def get_sources(self, shell_command: ShellCommand,
-                    pools: Optional[List[Pool]] = None) -> List[Tuple[BackupSource, List[Pool]]]:
-        source_pool_view_mapping: List[Tuple[BackupSource, List[Pool]]] = []
+    def filter_by_sources(self, pools: PoolList) -> Dict[BackupSource, PoolList]:
+        source_pool_view_mapping: Dict[BackupSource, PoolList] = {}
         """Maps a backup source to a logical view of a pool list"""
 
-        if pools is None:
-            pools = scan_zfs_pools(shell_command)
-
-        for source in self.sources:
-            pool_list: List[Pool] = []
-            source_pool_view_mapping.append((source, pool_list))
+        for source in self.sources.values():
+            pools_view = pools.view()
+            source_pool_view_mapping[source] = pools_view
 
             # iter pools, add datasets, add snapshots
-            for pool in pools:
-                pool_view = pool.view()
-                pool_list.append(pool_view)
-
+            for pool_view in pools_view:
                 for dataset_view in pool_view:
                     if not self.dataset_matches_source(dataset_view, source):
                         pool_view.remove_dataset(dataset_view)
@@ -81,47 +74,22 @@ class BackupSetup(object):
 
         return source_pool_view_mapping
 
-    def get_sources_old(self, shell_command: ShellCommand, include_all: bool = False
-                        ) -> List[Tuple[BackupSource, List[Pool]]]:
-        source_pool_view_mapping: List[Tuple[BackupSource, List[Pool]]] = []
-        """Maps a backup source to a logical view of a pool list"""
-
-        # first scan for pools
-        pool_names = shell_command.list_pools()
-
-        for source in self.sources:
-            pool_list = []
-            source_pool_view_mapping.append((source, pool_list))
-
-            # iter pools, add datasets, add snapshots
-            for pool_name in pool_names:
-                pool = Pool(pool_name)
-                pool_list.append(pool)
-
-                pool_dataset_names = shell_command.list_datasets(pool.pool_name)
-                for dataset_name in pool_dataset_names:
-                    dataset = DataSet(pool.pool_name, dataset_name)
-                    if include_all or not self.dataset_matches_source(dataset, source):
-                        continue
-                    pool.add_dataset(dataset)
-
-                    dataset_snapshot_names = shell_command.list_snapshots(dataset.zfs_path)
-
-                    for snapshot_name in dataset_snapshot_names:
-                        if not snapshot_name.startswith(self.snapshot_prefix):
-                            continue
-                        snapshot = Snapshot(pool.pool_name, dataset.dataset_name, snapshot_name)
-                        dataset.add_snapshot(snapshot)
-
-        return source_pool_view_mapping
-
     def gather_target_pools(self, shell_command: ShellCommand, include_all: bool = False
-                            ) -> Dict[Tuple[Optional[SshHost], str], List[Pool]]:
+                            ) -> Dict[Tuple[Optional[SshHost], str], PoolList]:
+        """
+        Gather all pools from the available target paths.
+        The target pools may contain datasets, that are not part of the configuration.
+        Filtering is only based on the configured snapshot prefix by default.
 
-        host_target_path_pool_mapping: Dict[Tuple[Optional[SshHost], str], List[Pool]] = {}
+        :param shell_command: The command issuing object to use
+        :param include_all: also include snapshots that do not match the snapshot prefix
+        :return:
+        """
+
+        host_target_path_pool_mapping: Dict[Tuple[Optional[SshHost], str], PoolList] = {}
 
         host_target_path_list: Dict[Optional[SshHost], Set[str]] = {}
-        for source in self.sources:
+        for source in self.sources.values():
             for target_group in source.targets:
                 if target_group.remote not in host_target_path_list:
                     host_target_path_list[target_group.remote] = set()
@@ -152,7 +120,7 @@ class BackupSetup(object):
     def get_remote_zfs_source(self, shell_command: ShellCommand, include_all: bool = False) -> List[Pool]:
         # first scan for remote pools
         pools = []
-        for source in self.sources:
+        for source in self.sources.values():
             for target in source.targets:
                 if target.remote:
                     shell_command.remote = target.remote

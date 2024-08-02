@@ -1,6 +1,11 @@
-from typing import List, Optional
+import os
+import shlex
+import sys
+import tempfile
+from typing import List, Optional, Set
 
 from .Base import BaseShellCommand, CommandExecutionError
+from ..Constants import TARGET_STORAGE_SUBDIRECTORY, BACKUP_FILE_POSTFIX
 
 
 class ZfsCommands(BaseShellCommand):
@@ -75,3 +80,44 @@ class ZfsCommands(BaseShellCommand):
     def delete_snapshot(self, source_dataset: str, snapshot: str):
         command = 'zfs destroy "{}@{}"'.format(source_dataset, snapshot)
         return self._execute(command, capture_output=False)
+
+    def zfs_send_snapshot_to_target(self, source_dataset: str,
+                                    previous_snapshot: Optional[str], next_snapshot: str,
+                                    target_paths: Set[str],
+                                    include_intermediate_snapshots: bool = False) -> str:
+
+        estimated_size = self.get_estimated_snapshot_size(source_dataset, previous_snapshot, next_snapshot,
+                                                          include_intermediate_snapshots)
+
+        # with temporary file
+        with tempfile.NamedTemporaryFile() as tmp:
+            if previous_snapshot:
+                command = 'zfs send --raw {} "{}@{}" "{}@{}" '.format(
+                    "-I" if include_intermediate_snapshots else '-i',
+                    source_dataset, previous_snapshot, source_dataset, next_snapshot)
+            else:
+                command = 'zfs send --raw "{}@{}"'.format(source_dataset, next_snapshot)
+
+            command += ' | tee >( sha256sum -b > "{}" )'.format(tmp.name)
+            command += ' | pv {} --size {}'.format(self._PV_DEFAULT_OPTIONS, estimated_size)
+
+            if self.remote:
+                command += ' | ' + self._get_ssh_command(self.remote)
+                tee_quoted_paths = ' '.join('"{}"'.format(
+                    os.path.join(path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                                 next_snapshot + BACKUP_FILE_POSTFIX))
+                                            for path in sorted(target_paths))
+                command += shlex.quote('tee {} > /dev/null'.format(tee_quoted_paths))
+            else:
+                tee_quoted_paths = ' '.join('"{}"'.format(
+                    os.path.join(path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                                 next_snapshot + BACKUP_FILE_POSTFIX))
+                                            for path in sorted(target_paths))
+                command += ' | tee {} > /dev/null'.format(tee_quoted_paths)
+
+            sys.stdout.flush()
+            sys.stderr.flush()
+            self._execute(command, capture_output=False)
+            sys.stdout.flush()
+            sys.stderr.flush()
+            return tmp.read().decode('utf-8').strip().split(' ')[0]

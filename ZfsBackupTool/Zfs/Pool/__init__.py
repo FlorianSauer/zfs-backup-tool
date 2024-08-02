@@ -1,11 +1,13 @@
-from typing import Dict, List, Iterator
+from typing import Dict, List, Iterator, Iterable, Union
 
 from .Dataset import DataSet
+from .Dataset.Snapshot import Snapshot
 
 
 class Pool(object):
     def __init__(self, pool_name: str):
         self.pool_name = pool_name
+        self.zfs_path = pool_name
         self.datasets: Dict[str, DataSet] = {}
 
     def __str__(self):
@@ -51,8 +53,24 @@ class Pool(object):
             raise ValueError("Dataset '{}' not found in the pool '{}'".format(dataset.zfs_path, self.pool_name))
         self.datasets.pop(dataset.zfs_path)
 
+    def iter_datasets(self) -> Iterable[DataSet]:
+        for dataset in self:
+            yield dataset
+
+    def iter_snapshots(self) -> Iterable[Snapshot]:
+        for dataset in self:
+            for snapshot in dataset:
+                yield snapshot
+
+    def resolve_zfs_path(self, zfs_path: str) -> Union[DataSet, Snapshot]:
+        if zfs_path.startswith(self.zfs_path):
+            dataset_path, snapshot_name = zfs_path.split("@", 1)
+            return self.datasets[dataset_path].resolve_zfs_path(zfs_path)
+        raise ValueError("Dataset '{}' not found in the pool '{}'".format(zfs_path, self.zfs_path))
+
     def get_dataset_by_name(self, dataset_name: str) -> DataSet:
         return self.datasets[self.resolve_dataset_name(dataset_name)]
+
     def print(self):
         print("Pool: {}".format(self.pool_name))
         for dataset in self:
@@ -100,8 +118,8 @@ class Pool(object):
             if dataset.zfs_path not in difference_datasets:
                 # no difference for this dataset -> removable, but check snapshots
                 difference_dataset = dataset.difference(*(pool.datasets[dataset.zfs_path]
-                                                           for pool in other_pools
-                                                           if dataset.zfs_path in pool.datasets))
+                                                          for pool in other_pools
+                                                          if dataset.zfs_path in pool.datasets))
                 if difference_dataset.snapshots:
                     # replace the dataset with the difference dataset, which contains the difference snapshots
                     difference_pool.remove_dataset(dataset)
@@ -116,27 +134,25 @@ class Pool(object):
 
         (i. e. all datasets and snapshots that are in both pools.)
         """
-        base_pool_datasets = set(self.datasets.keys())
+        # base_pool_datasets = set(self.datasets.keys())
 
-        intersection_datasets = base_pool_datasets.intersection(*(pool.datasets.keys() for pool in other_pools))
+        # intersection_datasets = base_pool_datasets.intersection(*(pool.datasets.keys() for pool in other_pools))
 
-        intersection_pool = self.view()
-        for dataset in list(intersection_pool.datasets.values()):
-            if dataset.zfs_path not in intersection_datasets:
-                # no difference for this dataset -> removable, but check snapshots
-                intersection_dataset = dataset.intersection(*(pool.datasets[dataset.zfs_path]
-                                                           for pool in other_pools
-                                                           if dataset.zfs_path in pool.datasets))
-                if intersection_dataset.snapshots:
-                    # replace the dataset with the intersection dataset, which contains the intersection snapshots
-                    intersection_pool.remove_dataset(dataset)
-                    intersection_pool.add_dataset(intersection_dataset)
-                else:
-                    intersection_pool.remove_dataset(dataset)
+        intersection_base_pool = self.view()
+        intersection_pool = self.copy()
+        for pool in other_pools:
+            intersection_pool = intersection_pool.copy()
+            intersecting_datasets = set(intersection_base_pool.datasets.keys()).intersection(pool.datasets.keys())
+            for intersecting_dataset in intersecting_datasets:
+                intersection_pool.add_dataset(
+                        intersection_base_pool.datasets[intersecting_dataset].intersection(
+                            pool.datasets[intersecting_dataset]
+                        ))
+            intersection_base_pool = intersection_pool.view()
         return intersection_pool
 
     def is_incremental(self) -> bool:
         return any(dataset.is_incremental() for dataset in self.datasets.values())
 
-
-
+    def has_snapshots(self):
+        return any(dataset.has_snapshots() for dataset in self.datasets.values())

@@ -50,13 +50,25 @@ class DataSet(object):
                 "Dataset '{}' already added to the pool '{}'".format(snapshot.snapshot_name, self.zfs_path))
         self.snapshots[snapshot.zfs_path] = snapshot
 
-    def remove_snapshot(self, snapshot: Snapshot):
+    def remove_snapshot(self, snapshot: Snapshot) -> Snapshot:
         if snapshot.zfs_path not in self.snapshots:
             raise ValueError(
                 "Dataset '{}' not found in the pool '{}'".format(snapshot.snapshot_name, self.zfs_path))
-        self.snapshots.pop(snapshot.zfs_path)
+        return self.snapshots.pop(snapshot.zfs_path)
+
+    def iter_snapshots(self) -> Iterable[Snapshot]:
+        for snapshot in self:
+            yield snapshot
+
+    def resolve_zfs_path(self, zfs_path: str) -> Snapshot:
+        if zfs_path.startswith(self.zfs_path):
+            snapshot_name = zfs_path.split("@")[1]
+            return self.snapshots[snapshot_name]
+        raise ValueError("Snapshot '{}' not found in the dataset '{}'".format(zfs_path, self.zfs_path))
 
     def get_snapshot_by_name(self, snapshot_name: str) -> Snapshot:
+        if snapshot_name.startswith(self.zfs_path):
+            return self.snapshots[snapshot_name]
         return self.snapshots[self.resolve_snapshot_name(snapshot_name)]
 
     def print(self):
@@ -93,13 +105,17 @@ class DataSet(object):
 
     @classmethod
     def sort_snapshots(cls, snapshots: Iterable[Snapshot]) -> List[Snapshot]:
-        sorted_snapshots = sorted(snapshots, key=lambda s: s.zfs_path)
-        # reverse list to get initial snapshots at the beginning while also keeping the order
-        for index, snapshot in reversed(list(enumerate(sorted_snapshots))):
-            if snapshot.snapshot_name.endswith(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR + INITIAL_SNAPSHOT_POSTFIX):
-                sorted_snapshots.insert(0,
-                                        sorted_snapshots.pop(index))
-        return sorted_snapshots
+        snapshots = list(snapshots)
+        initial_snapshots = sorted([s for s in snapshots
+                                    if s.snapshot_name.endswith(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR
+                                                                + INITIAL_SNAPSHOT_POSTFIX)],
+                                   key=lambda s: s.zfs_path)
+        non_initial_snapshots = sorted([s for s in snapshots
+                                        if not s.snapshot_name.endswith(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR
+                                                                        + INITIAL_SNAPSHOT_POSTFIX)],
+                                       key=lambda s: s.zfs_path)
+
+        return initial_snapshots + non_initial_snapshots
 
     def difference(self, *other_datasets: 'DataSet') -> 'DataSet':
         """
@@ -127,7 +143,7 @@ class DataSet(object):
         base_dataset_snapshots = set(self.snapshots.keys())
 
         intersection_snapshots = base_dataset_snapshots.intersection(*(dataset.snapshots.keys()
-                                                                   for dataset in other_datasets))
+                                                                       for dataset in other_datasets))
 
         difference_dataset = self.view()
         for snapshot in difference_dataset:
@@ -137,3 +153,6 @@ class DataSet(object):
 
     def is_incremental(self) -> bool:
         return any(snapshot.has_increment_base() for snapshot in self.snapshots.values())
+
+    def has_snapshots(self):
+        return len(self.snapshots) > 0

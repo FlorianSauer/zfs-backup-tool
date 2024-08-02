@@ -1,7 +1,5 @@
 from typing import Optional
 
-from ZfsBackupTool.Constants import INITIAL_SNAPSHOT_POSTFIX, SNAPSHOT_PREFIX_POSTFIX_SEPARATOR
-
 
 class Snapshot(object):
     def __init__(self, pool_name: str, dataset_name: str, snapshot_name: str):
@@ -13,9 +11,13 @@ class Snapshot(object):
         self._incremental_base: Optional['Snapshot'] = None
 
     def __str__(self):
+        if self.has_increment_base():
+            return "Snapshot({}) -> {}".format(self.zfs_path, self._incremental_base.snapshot_name)
         return "Snapshot({})".format(self.zfs_path)
 
-    def __eq__(self, other: 'Snapshot'):
+    def __eq__(self, other):
+        if not isinstance(other, Snapshot):
+            return False
         # check the snapshot paths and other attributes
         return self.zfs_path == other.zfs_path
 
@@ -23,13 +25,25 @@ class Snapshot(object):
         return Snapshot(self.pool_name, self.dataset_name, self.snapshot_name)
 
     def view(self):
-        return Snapshot(self.pool_name, self.dataset_name, self.snapshot_name)
+        view_snapshot = Snapshot(self.pool_name, self.dataset_name, self.snapshot_name)
+        if self._incremental_base:
+            view_snapshot._incremental_base = self._incremental_base.view()
+        return view_snapshot
 
     def print(self):
-        print("    Snapshot: {} ({})".format(self.snapshot_name, self.zfs_path))
+        if self.has_increment_base():
+            print("    Snapshot: {} ({}) -> {}".format(self.snapshot_name, self.zfs_path,
+                                                       self._incremental_base.snapshot_name))
+        else:
+            print("    Snapshot: {} ({})".format(self.snapshot_name, self.zfs_path))
 
     @classmethod
     def merge(cls, pool_name: str, dataset_name: str, *others: 'Snapshot'):
+        # verify all snapshots have the same pool and dataset name
+        if any(snapshot.pool_name != pool_name for snapshot in others):
+            raise ValueError("Snapshots must have the same pool name to be merged")
+        if any(snapshot.dataset_name != dataset_name for snapshot in others):
+            raise ValueError("Snapshots must have the same dataset name to be merged")
         # build a set with all snapshot names
         snapshot_names = set(snapshot.snapshot_name for snapshot in others)
         # verify all datasets have the same name
@@ -39,6 +53,10 @@ class Snapshot(object):
         snapshot_name = snapshot_names.pop()
 
         new_merged_snapshot = cls(pool_name, dataset_name, snapshot_name)
+
+        incremental_bases = [snapshot.get_incremental_base() for snapshot in others if snapshot.has_increment_base()]
+        if incremental_bases:
+            new_merged_snapshot.set_incremental_base(cls.merge(pool_name, dataset_name, *incremental_bases))
         return new_merged_snapshot
 
     def has_increment_base(self) -> bool:

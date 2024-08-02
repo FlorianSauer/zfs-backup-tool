@@ -1,9 +1,12 @@
+import os
 import shlex
 import sys
-from typing import List, Tuple
+import threading
+from subprocess import Popen
+from typing import List, Tuple, Dict, Set, cast, IO
 
-from .Base import BaseShellCommand, CommandExecutionError
-from .SshHost import SshHost
+from .Base import BaseShellCommand, CommandExecutionError, PipePrinterThread
+from ..Constants import TARGET_STORAGE_SUBDIRECTORY, BACKUP_FILE_POSTFIX, CALCULATED_CHECKSUM_FILE_POSTFIX
 
 
 class FsCommands(BaseShellCommand):
@@ -118,3 +121,87 @@ class FsCommands(BaseShellCommand):
             sys.exit(1)
         else:
             return True
+
+    def _target_get_checksum(self, source_dataset: str, next_snapshot: str, target_path: str) -> Tuple[Popen, str]:
+        if self.remote:
+            command = self._get_ssh_command(self.remote)
+            checksum_command = 'pv {} --name "{}" --cursor "{}"'.format(
+                self._PV_DEFAULT_OPTIONS,
+                target_path,
+                os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                             next_snapshot + BACKUP_FILE_POSTFIX))
+            checksum_command += ' | sha256sum -b > "{}"'.format(
+                os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                             next_snapshot + BACKUP_FILE_POSTFIX + CALCULATED_CHECKSUM_FILE_POSTFIX))
+            command += shlex.quote(checksum_command)
+        else:
+            command = 'pv {} --name "{}" --cursor "{}"'.format(
+                self._PV_DEFAULT_OPTIONS,
+                target_path,
+                os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                             next_snapshot + BACKUP_FILE_POSTFIX))
+            command += ' | sha256sum -b > "{}"'.format(
+                os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                             next_snapshot + BACKUP_FILE_POSTFIX + CALCULATED_CHECKSUM_FILE_POSTFIX))
+
+        sub_process = self._execute(command, capture_output=True, capture_stdout=False, capture_stderr=True,
+                                    no_wait=True)
+
+        return sub_process, command
+
+    def target_get_checksums(self, source_dataset: str, next_snapshot: str, target_paths: Set[str]):
+        output_dict: Dict[str, str] = {}
+        print_lock = threading.Lock()
+
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+        target_process_printer_mapping: Dict[str, Tuple[Popen, PipePrinterThread]] = {}
+
+        for target_index, target_path in enumerate(sorted(target_paths)):
+            pv_process, command = self._target_get_checksum(source_dataset, next_snapshot, target_path)
+            stderr_printer = PipePrinterThread(cast(IO[bytes], pv_process.stderr), sys.stderr.buffer, target_index,
+                                               print_lock)
+            if target_index > 0:
+                sys.stderr.write('\n\r')
+
+            target_process_printer_mapping[target_path] = (pv_process, stderr_printer)
+
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+        # start printer threads
+        for _, stderr_printer in target_process_printer_mapping.values():
+            stderr_printer.start()
+
+        try:
+            # wait for all processes to finish
+            for pv_process, _ in target_process_printer_mapping.values():
+                pv_process.wait()
+        except KeyboardInterrupt:
+            # abort all printer threads
+            for _, stderr_printer in target_process_printer_mapping.values():
+                stderr_printer.abort()
+            # kill all processes
+            for pv_process, _ in target_process_printer_mapping.values():
+                pv_process.kill()
+            # and wait for them to terminate
+            for pv_process, _ in target_process_printer_mapping.values():
+                pv_process.wait()
+            raise
+        finally:
+            sys.stderr.write('\n\r')
+            sys.stdout.flush()
+            sys.stderr.flush()
+
+        for target_path, (pv_process, stderr_printer) in target_process_printer_mapping.items():
+            stderr_printer.join()
+            if pv_process.returncode != 0:
+                raise CommandExecutionError(pv_process, "Error executing command > {} <".format(str(pv_process.args)))
+
+            checksum_file = os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
+                                         next_snapshot + BACKUP_FILE_POSTFIX + CALCULATED_CHECKSUM_FILE_POSTFIX)
+            checksum = self.target_read_checksum_from_file(checksum_file)
+            output_dict[target_path] = checksum
+
+        return output_dict
