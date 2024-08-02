@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+set -e
+
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
 disk_0_file="/dev/shm/disk0"
 disk_1_file="/dev/shm/disk1"
 
@@ -31,5 +35,11 @@ mkdir -p "/dev/shm/local_mirror_storage2"
 chmod -R 777 /dev/shm/local_mirror_storage1
 chmod -R 777 /dev/shm/local_mirror_storage2
 
+# install old version of zfs-backup-tool for basic testing
 (cd /tmp && git clone "http://git.lan:3000/fsauer/zfs-backup-tool.git")
 (cd /tmp/zfs-backup-tool && git checkout "v1.0.0")
+
+# backup the dev pool completely 3 times
+(cd /tmp/zfs-backup-tool && ./zfs-backup-tool.sh "$SCRIPT_DIR/dev-scripts/dev_config_full_backup.conf" backup)
+(cd /tmp/zfs-backup-tool && ./zfs-backup-tool.sh "$SCRIPT_DIR/dev-scripts/dev_config_full_backup.conf" backup)
+(cd /tmp/zfs-backup-tool && ./zfs-backup-tool.sh "$SCRIPT_DIR/dev-scripts/dev_config_full_backup.conf" backup)
