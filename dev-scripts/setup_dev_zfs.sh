@@ -45,3 +45,5 @@ mkdir -p "$tmp_dir"
 (cd "$tmp_dir/zfs-backup-tool" && python3 ./zfs-backup-tool.py "$SCRIPT_DIR/dev_config_full_backup.conf" backup)
 (cd "$tmp_dir/zfs-backup-tool" && python3 ./zfs-backup-tool.py "$SCRIPT_DIR/dev_config_full_backup.conf" backup)
 (cd "$tmp_dir/zfs-backup-tool" && python3 ./zfs-backup-tool.py "$SCRIPT_DIR/dev_config_full_backup.conf" backup)
+# and verify the backups
+(cd "$tmp_dir/zfs-backup-tool" && python3 ./zfs-backup-tool.py "$SCRIPT_DIR/dev_config_full_backup.conf" verify)
