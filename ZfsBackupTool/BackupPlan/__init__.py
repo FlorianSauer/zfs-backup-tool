@@ -266,6 +266,23 @@ class BackupPlan(object):
                     self._write_snapshot_to_target(snapshot, host, set(target_paths))
 
             print()
+    def restore_snapshots(self, restore_pools: Dict[Tuple[Optional[SshHost], str], PoolList]):
+        # group target paths by host
+        host_targetpaths_pools = self._group_target_paths_by_host(restore_pools)
+
+        # iterate over all hosts, group pools from different target paths together, to repair them in one go
+        for host, targetpaths_pools in host_targetpaths_pools.items():
+            # combine pools with equal target paths
+            pool_target_paths = self._group_target_paths(targetpaths_pools)
+
+            for target_paths, pools in pool_target_paths.items():
+                print("Reading snapshots from target paths: ", target_paths)
+                pools.print()
+                # for snapshot in pools.iter_snapshots():
+                #     print("Repairing snapshot: ", snapshot.zfs_path)
+                #     self._write_snapshot_to_target(snapshot, host, set(target_paths))
+
+            print()
 
     def backup_snapshots(self, backup_pools: Dict[Tuple[Optional[SshHost], str], PoolList]):
         """

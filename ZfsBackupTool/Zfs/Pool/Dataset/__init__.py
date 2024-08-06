@@ -156,3 +156,24 @@ class DataSet(object):
 
     def has_snapshots(self):
         return len(self.snapshots) > 0
+
+    def get_incremental_children(self, parent: Snapshot) -> 'DataSet':
+        """
+        Get a dataset containing only the snapshots that are incremental children of the given parent snapshot.
+
+        This method creates a view of the current dataset and removes all snapshots that are not incremental children
+        of the specified parent snapshot. The resulting dataset will contain the parent snapshot and all snapshots
+        that follow it in the incremental chain.
+
+        Args:
+            parent (Snapshot): The parent snapshot from which to start the incremental chain.
+
+        Returns:
+            DataSet: A new dataset containing only the snapshots that are incremental children of the parent snapshot.
+        """
+        thinned_out_view = self.view()
+        for snapshot in list(thinned_out_view.iter_snapshots()):
+            if snapshot == parent:
+                break
+            thinned_out_view.remove_snapshot(snapshot)
+        return thinned_out_view

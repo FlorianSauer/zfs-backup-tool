@@ -46,6 +46,9 @@ class Pool(object):
     def add_dataset(self, dataset: DataSet):
         if dataset.zfs_path in self.datasets:
             raise ValueError("Dataset '{}' already added to the pool '{}'".format(dataset.zfs_path, self.pool_name))
+        if dataset.pool_name != self.pool_name:
+            raise ValueError("Dataset '{}' must have the same pool name as the pool '{}'".format(dataset.zfs_path,
+                                                                                                   self.pool_name))
         self.datasets[dataset.zfs_path] = dataset
 
     def remove_dataset(self, dataset: DataSet):

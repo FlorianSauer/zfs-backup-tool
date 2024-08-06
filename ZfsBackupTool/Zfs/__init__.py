@@ -9,7 +9,7 @@ from .Pool.Dataset.Snapshot import Snapshot
 __all__ = ['build_incremental_snapshot_refs',
            'scan_zfs_pools', 'scan_filebased_zfs_pools',
            'merge_pools', 'difference_pools', 'intersection_pools',
-           'Pool', 'DataSet', 'Snapshot']
+           'PoolList', 'Pool', 'DataSet', 'Snapshot']
 
 from ..Constants import (BACKUP_FILE_POSTFIX, CHECKSUM_FILE_POSTFIX, SNAPSHOT_PREFIX_POSTFIX_SEPARATOR)
 
@@ -305,6 +305,11 @@ class PoolList(object):
 
     def has_snapshots(self):
         return any(pool.has_snapshots() for pool in self.pools.values())
+
+    def get_dataset_by_path(self, zfs_path: str):
+        pool_name, dataset_name = zfs_path.split("/", 1)
+        dataset_name = dataset_name.split("@", 1)[0]
+        return self.pools[pool_name].datasets["{}/{}".format(pool_name, dataset_name)]
 
 
 def build_incremental_snapshot_refs(pool_list: PoolList) -> None:
