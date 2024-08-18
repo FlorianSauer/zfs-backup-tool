@@ -21,7 +21,9 @@ class DataSet(object):
     def __contains__(self, item: Snapshot):
         return item.zfs_path in self.snapshots
 
-    def __eq__(self, other: 'DataSet'):
+    def __eq__(self, other):
+        if not isinstance(other, DataSet):
+            return False
         # our snapshots and the other snapshots must be the same
         if set(self.snapshots.keys()) != set(other.snapshots.keys()):
             return False
@@ -33,9 +35,17 @@ class DataSet(object):
         return self.zfs_path == other.zfs_path
 
     def copy(self):
+        """
+        This method creates a new DataSet object with the same pool name and dataset name as the current instance.
+        However, the snapshots are not copied to the new instance.
+        """
         return DataSet(self.pool_name, self.dataset_name)
 
     def view(self):
+        """
+        Creates a full copy of the current DataSet instance including all sub-references.
+        Sub-references are also copied and not just referenced.
+        """
         view_dataset = DataSet(self.pool_name, self.dataset_name)
         for snapshot in self.snapshots.values():
             view_dataset.add_snapshot(snapshot.view())
@@ -56,7 +66,7 @@ class DataSet(object):
                 "Dataset '{}' not found in the pool '{}'".format(snapshot.snapshot_name, self.zfs_path))
         return self.snapshots.pop(snapshot.zfs_path)
 
-    def iter_snapshots(self) -> Iterable[Snapshot]:
+    def iter_snapshots(self) -> Iterator[Snapshot]:
         for snapshot in self:
             yield snapshot
 
@@ -152,7 +162,7 @@ class DataSet(object):
         return difference_dataset
 
     def is_incremental(self) -> bool:
-        return any(snapshot.has_increment_base() for snapshot in self.snapshots.values())
+        return any(snapshot.has_incremental_base() for snapshot in self.snapshots.values())
 
     def has_snapshots(self):
         return len(self.snapshots) > 0
@@ -177,3 +187,33 @@ class DataSet(object):
                 break
             thinned_out_view.remove_snapshot(snapshot)
         return thinned_out_view
+
+    def build_incremental_snapshot_refs(self) -> None:
+        """
+        Build incremental snapshot references for all snapshots.
+        """
+        sorted_snapshots = self.sort_snapshots(self.snapshots.values())
+        snapshot_prefixes = set()
+        for snapshot in sorted_snapshots:
+            snapshot_prefix = snapshot.snapshot_name.rsplit(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR, 1)[0]
+            snapshot_prefixes.add(snapshot_prefix)
+
+        for snapshot_prefix in snapshot_prefixes:
+            incremental_base = None
+            for index, snapshot in enumerate(sorted_snapshots):
+                if snapshot.snapshot_name.startswith(snapshot_prefix + SNAPSHOT_PREFIX_POSTFIX_SEPARATOR):
+                    if incremental_base:
+                        # verify incremental base +1 is equal to our current snapshot index
+                        if incremental_base.snapshot_name.endswith(
+                                SNAPSHOT_PREFIX_POSTFIX_SEPARATOR + INITIAL_SNAPSHOT_POSTFIX):
+                            incremental_base_index = 0
+                        else:
+                            incremental_base_index = int(
+                                incremental_base.snapshot_name.split(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR)[-1])
+                        snapshot_index = int(
+                            snapshot.snapshot_name.split(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR)[-1])
+                        if incremental_base_index + 1 != snapshot_index:
+                            continue
+
+                        snapshot.set_incremental_base(incremental_base)
+                    incremental_base = snapshot

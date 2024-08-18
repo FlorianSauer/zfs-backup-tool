@@ -20,7 +20,9 @@ class Pool(object):
     def __contains__(self, item: DataSet):
         return item.zfs_path in self.datasets
 
-    def __eq__(self, other: 'Pool'):
+    def __eq__(self, other):
+        if not isinstance(other, Pool):
+            return False
         # our datasets and the other datasets must be the same
         if set(self.datasets.keys()) != set(other.datasets.keys()):
             return False
@@ -32,9 +34,17 @@ class Pool(object):
         return self.pool_name == other.pool_name
 
     def copy(self):
+        """
+        This method creates a new Pool object with the same pool name as the current instance.
+        However, the datasets are not copied to the new instance.
+        """
         return Pool(self.pool_name)
 
     def view(self):
+        """
+        Creates a full copy of the current Pool instance including all sub-references.
+        Sub-references are also copied and not just referenced.
+        """
         view_pool = Pool(self.pool_name)
         for dataset in self.datasets.values():
             view_pool.add_dataset(dataset.view())
@@ -159,3 +169,10 @@ class Pool(object):
 
     def has_snapshots(self):
         return any(dataset.has_snapshots() for dataset in self.datasets.values())
+
+    def build_incremental_snapshot_refs(self) -> None:
+        """
+        Build incremental snapshot references for all snapshots in this Pool.
+        """
+        for dataset in self.datasets.values():
+            dataset.build_incremental_snapshot_refs()

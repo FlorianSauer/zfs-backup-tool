@@ -11,7 +11,8 @@ __all__ = ['build_incremental_snapshot_refs',
            'merge_pools', 'difference_pools', 'intersection_pools',
            'PoolList', 'Pool', 'DataSet', 'Snapshot']
 
-from ..Constants import (BACKUP_FILE_POSTFIX, CHECKSUM_FILE_POSTFIX, SNAPSHOT_PREFIX_POSTFIX_SEPARATOR)
+from ..Constants import (BACKUP_FILE_POSTFIX, CHECKSUM_FILE_POSTFIX, SNAPSHOT_PREFIX_POSTFIX_SEPARATOR,
+                         INITIAL_SNAPSHOT_POSTFIX)
 
 
 def merge_pools(*pools: Union[Pool, Iterable[Pool]]) -> List[Pool]:
@@ -42,153 +43,6 @@ def merge_pools(*pools: Union[Pool, Iterable[Pool]]) -> List[Pool]:
     return merged_pools
 
 
-def difference_pools(base_pools: Union[Pool, Iterable[Pool]], *other_pools: Union[Pool, Iterable[Pool]],
-                     ignore_missing_base=False) -> List[Pool]:
-    """
-    Calculate the difference between multiple ZFS pool objects or collections of pool objects.
-
-    This function takes any number of arguments, each of which can be either a single Pool object or an iterable
-    collection of Pool objects (e.g., list, set). It organizes the pools by their names and then calculates the
-    difference between pools with the same name.
-    """
-    equal_pools: Dict[str, List[Pool]] = {}
-    if isinstance(base_pools, Pool):
-        equal_pools[base_pools.pool_name] = [base_pools]
-    elif isinstance(base_pools, Iterable):
-        for sub_pool in base_pools:
-            equal_pools[sub_pool.pool_name] = [sub_pool]
-    else:
-        raise ValueError("Invalid pool type {}".format(type(base_pools)))
-
-    for pool in other_pools:
-        if isinstance(pool, Pool):
-            if pool.pool_name not in equal_pools:
-                if not ignore_missing_base:
-                    raise ValueError("Pool '{}' not found in the base pools".format(pool.pool_name))
-                else:
-                    # ignore missing base pool, this simulates the following:
-                    # >>> set().difference(set((1,2,3)))
-                    # set()
-                    pass
-            else:
-                equal_pools[pool.pool_name].append(pool)
-        elif isinstance(pool, Iterable):
-            for sub_pool in pool:
-                if sub_pool.pool_name not in equal_pools:
-                    if not ignore_missing_base:
-                        raise ValueError("Pool '{}' not found in the base pools".format(sub_pool.pool_name))
-                    else:
-                        # ignore missing base pool, this simulates the following:
-                        # >>> set().difference(set((1,2,3)))
-                        # set()
-                        pass
-                else:
-                    equal_pools[sub_pool.pool_name].append(sub_pool)
-        else:
-            raise ValueError("Invalid pool type {}".format(type(pool)))
-
-    differenced_pools = []
-    for pool_name, pool_list in equal_pools.items():
-        base_pool = pool_list.pop()
-        difference_pool = base_pool.difference(*pool_list)
-        differenced_pools.append(difference_pool)
-
-    return differenced_pools
-
-
-def intersection_poolsold(base_pools: Union[Pool, Iterable[Pool]], *other_pools: Union[Pool, Iterable[Pool]],
-                       ignore_missing_base=False) -> List[Pool]:
-    """
-    Calculate the intersection between multiple ZFS pool objects or collections of pool objects.
-
-    This function takes any number of arguments, each of which can be either a single Pool object or an iterable
-    collection of Pool objects (e.g., list, set). It organizes the pools by their names and then calculates the
-    intersection between pools with the same name.
-    """
-    equal_pools: Dict[str, List[Pool]] = {}
-    if isinstance(base_pools, Pool):
-        equal_pools[base_pools.pool_name] = [base_pools]
-    elif isinstance(base_pools, Iterable):
-        for sub_pool in base_pools:
-            equal_pools[sub_pool.pool_name] = [sub_pool]
-    else:
-        raise ValueError("Invalid pool type {}".format(type(base_pools)))
-
-    for pool in other_pools:
-        if isinstance(pool, Pool):
-            if pool.pool_name not in equal_pools:
-                if not ignore_missing_base:
-                    raise ValueError("Pool '{}' not found in the base pools".format(pool.pool_name))
-                else:
-                    pass  # ignore missing base pool
-            else:
-                equal_pools[pool.pool_name].append(pool)
-        elif isinstance(pool, Iterable):
-            for sub_pool in pool:
-                if sub_pool.pool_name not in equal_pools:
-                    if not ignore_missing_base:
-                        raise ValueError("Pool '{}' not found in the base pools".format(sub_pool.pool_name))
-                    else:
-                        pass  # ignore missing base pool
-                else:
-                    equal_pools[sub_pool.pool_name].append(sub_pool)
-        else:
-            raise ValueError("Invalid pool type {}".format(type(pool)))
-
-    differenced_pools = []
-    for pool_name, pool_list in equal_pools.items():
-        base_pool = pool_list.pop()
-        difference_pool = base_pool.intersection(*pool_list)
-        differenced_pools.append(difference_pool)
-
-    return differenced_pools
-
-def intersection_pools(*pools: Union[Pool, Iterable[Pool]]) -> List[Pool]:
-    """
-    Calculate the intersection between multiple ZFS pool objects or collections of pool objects.
-
-    This function takes any number of arguments, each of which can be either a single Pool object or an iterable
-    collection of Pool objects (e.g., list, set). It organizes the pools by their names and then calculates the
-    intersection between pools with the same name.
-    """
-    # for item in pools:
-    #     if isinstance(item, Pool):
-    #         print("item is pool")
-    #         item.print()
-    #     elif isinstance(item, Iterable):
-    #         for sub_pool in item:
-    #             print("item is sub pool")
-    #             sub_pool.print()
-    equal_pools: Dict[str, List[Pool]] = {}
-    for item in pools:
-        if isinstance(item, Pool):
-            if not item.pool_name in equal_pools:
-                equal_pools[item.pool_name] = []
-            equal_pools[item.pool_name].append(item)
-        elif isinstance(item, Iterable):
-            sub_pool: Pool
-            for sub_pool in item:
-                if not sub_pool.pool_name in equal_pools:
-                    equal_pools[sub_pool.pool_name] = []
-                equal_pools[sub_pool.pool_name].append(sub_pool)
-        else:
-            raise ValueError("Invalid pool type {}".format(type(item)))
-
-    intersection_pools = []
-    for pool_name, pool_list in equal_pools.items():
-        if len(pool_list) == 1:
-            # skip pools with only one pool, second comparison pool would be an empty pool
-            # equal example: set((1,2,3)).intersection(set()) == set()
-            continue
-        base_pool = pool_list.pop()
-        # print("using base pool: ")
-        # base_pool.print()
-        intersection_pool = base_pool.intersection(*pool_list)
-        intersection_pools.append(intersection_pool)
-
-    return intersection_pools
-
-
 class PoolList(object):
     """
     Class to store multiple pools with DIFFERENT pool names in one object.
@@ -217,7 +71,9 @@ class PoolList(object):
     def __contains__(self, item: Pool):
         return item in self.pools.values()
 
-    def __eq__(self, other: 'PoolList'):
+    def __eq__(self, other):
+        if not isinstance(other, PoolList):
+            return False
         # our pools and the other pools must be the same
         if set(self.pools.keys()) != set(other.pools.keys()):
             return False
@@ -228,9 +84,17 @@ class PoolList(object):
         return True
 
     def copy(self):
-        return PoolList()
+        """
+        This method creates a new PoolList object with the same pool names as the current instance.
+        However, the pools are not copied to the new instance.
+        """
+        return PoolList(*[pool.copy() for pool in self.pools.values()])
 
     def view(self):
+        """
+        Creates a full copy of the current PoolList instance including all sub-references.
+        Sub-references are also copied and not just referenced.
+        """
         return PoolList(*[pool.view() for pool in self.pools.values()])
 
     def add_pool(self, pool: Pool):
@@ -270,7 +134,30 @@ class PoolList(object):
 
     @classmethod
     def merge(cls, *others: 'PoolList') -> 'PoolList':
-        return cls(merge_pools(*(p.pools.values() for p in others)))
+        equal_pools: Dict[str, List[Pool]] = {}
+        for pool_list in others:
+            if isinstance(pool_list, PoolList):
+                for pool in pool_list:
+                    if pool.pool_name in equal_pools:
+                        equal_pools[pool.pool_name].append(pool)
+                    else:
+                        equal_pools[pool.pool_name] = [pool]
+            elif isinstance(pool_list, Iterable):
+                for sub_pool in others:
+                    for pool in sub_pool:
+                        if pool.pool_name in equal_pools:
+                            equal_pools[pool.pool_name].append(pool)
+                        else:
+                            equal_pools[pool.pool_name] = [pool]
+            else:
+                raise ValueError("Invalid pool type {}".format(type(pool_list)))
+
+        merged_pools = []
+        for pool_name, pool_list in equal_pools.items():
+            merged_pool = Pool.merge(*pool_list)
+            merged_pools.append(merged_pool)
+
+        return PoolList(merged_pools)
 
     def difference(self, *other_pool_lists: 'PoolList') -> 'PoolList':
         """
@@ -300,8 +187,36 @@ class PoolList(object):
         return diff_poollist
 
     def intersection(self, *other_pool_lists: 'PoolList') -> 'PoolList':
-        return PoolList(intersection_pools(list(self.pools.values()),
-                                           *(list(p.pools.values()) for p in other_pool_lists)))
+        equal_pools: Dict[str, List[Pool]] = {}
+        for pool in self.pools.values():
+            equal_pools[pool.pool_name] = [pool]
+        for item in other_pool_lists:
+            if isinstance(item, PoolList):
+                for pool in item:
+                    if not pool.pool_name in equal_pools:
+                        equal_pools[pool.pool_name] = []
+                    equal_pools[pool.pool_name].append(pool)
+            elif isinstance(item, Iterable):
+                sub_pool: PoolList
+                for sub_pool in item:
+                    for pool in sub_pool:
+                        if not pool.pool_name in equal_pools:
+                            equal_pools[pool.pool_name] = []
+                        equal_pools[pool.pool_name].append(pool)
+            else:
+                raise ValueError("Invalid pool type {}".format(type(item)))
+
+        intersection_pools = []
+        for pool_name, pool_list in equal_pools.items():
+            if len(pool_list) == 1:
+                # skip pools with only one pool, second comparison pool would be an empty pool
+                # equal example: set((1,2,3)).intersection(set()) == set()
+                continue
+            base_pool = pool_list.pop()
+            intersection_pool = base_pool.intersection(*pool_list)
+            intersection_pools.append(intersection_pool)
+
+        return PoolList(intersection_pools)
 
     def has_snapshots(self):
         return any(pool.has_snapshots() for pool in self.pools.values())
@@ -311,6 +226,12 @@ class PoolList(object):
         dataset_name = dataset_name.split("@", 1)[0]
         return self.pools[pool_name].datasets["{}/{}".format(pool_name, dataset_name)]
 
+    def build_incremental_snapshot_refs(self) -> None:
+        """
+        Build incremental snapshot references for all snapshots in this PoolList.
+        """
+        for pool in self.pools.values():
+            pool.build_incremental_snapshot_refs()
 
 def build_incremental_snapshot_refs(pool_list: PoolList) -> None:
     """
@@ -326,9 +247,21 @@ def build_incremental_snapshot_refs(pool_list: PoolList) -> None:
 
             for snapshot_prefix in snapshot_prefixes:
                 incremental_base = None
-                for snapshot in sorted_snapshots:
+                for index, snapshot in enumerate(sorted_snapshots):
                     if snapshot.snapshot_name.startswith(snapshot_prefix + SNAPSHOT_PREFIX_POSTFIX_SEPARATOR):
                         if incremental_base:
+                            # verify incremental base +1 is equal to our current snapshot index
+                            if incremental_base.snapshot_name.endswith(
+                                    SNAPSHOT_PREFIX_POSTFIX_SEPARATOR + INITIAL_SNAPSHOT_POSTFIX):
+                                incremental_base_index = 0
+                            else:
+                                incremental_base_index = int(
+                                    incremental_base.snapshot_name.split(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR)[-1])
+                            snapshot_index = int(
+                                snapshot.snapshot_name.split(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR)[-1])
+                            if incremental_base_index + 1 != snapshot_index:
+                                continue
+
                             snapshot.set_incremental_base(incremental_base)
                         incremental_base = snapshot
 

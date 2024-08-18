@@ -2,6 +2,7 @@ import os
 import shlex
 import sys
 import tempfile
+from pathlib import Path
 from typing import List, Optional, Set
 
 from .Base import BaseShellCommand, CommandExecutionError
@@ -121,3 +122,51 @@ class ZfsCommands(BaseShellCommand):
             sys.stdout.flush()
             sys.stderr.flush()
             return tmp.read().decode('utf-8').strip().split(' ')[0]
+
+    def zfs_recv_snapshot_from_target_old(self, target_path: str, source_dataset: str, snapshot: str, target: str) -> None:
+
+        # create datasets under root path, without the last part of the dataset path.
+        # the last part is created by zfs recv.
+        # otherwise, when an encrypted dataset is received, the unencrypted dataset would be overwritten by an
+        # encrypted dataset, which is forbidden by zfs.
+        re_joined_parts = target_path
+        for dataset in Path(source_dataset).parts[:-1]:
+            re_joined_parts = os.path.join(re_joined_parts, dataset)
+            if not self.has_dataset(re_joined_parts):
+                self._execute('zfs create "{}"'.format(re_joined_parts), capture_output=False)
+
+        backup_path = os.path.join(target, TARGET_STORAGE_SUBDIRECTORY, source_dataset, snapshot + BACKUP_FILE_POSTFIX)
+        if self.remote:
+            command = self._get_ssh_command(self.remote)
+            command += shlex.quote(
+                'pv {} "{}"'.format(self._PV_DEFAULT_OPTIONS, backup_path))
+        else:
+            command = 'pv {} "{}"'.format(self._PV_DEFAULT_OPTIONS, backup_path)
+        command += ' | zfs recv -F "{}"'.format(os.path.join(target_path, source_dataset))
+
+        self._execute(command, capture_output=False)
+
+    def zfs_recv_snapshot_from_target(self, restore_source_dirpath: str, restore_zfs_path: str,
+                                      restore_target_zfs_path: str) -> None:
+        # create datasets under restore_target, without the last part of the restore_zfs_path path.
+        # the last part is created by zfs recv.
+        # otherwise, when an encrypted dataset is received, the unencrypted dataset would be overwritten by an
+        # encrypted dataset, which is forbidden by zfs
+        restore_dataset_zfs_path, restore_snapshot = restore_zfs_path.split('@', 1)
+        re_joined_zfs_path_parts = restore_target_zfs_path
+        for dataset in Path(restore_dataset_zfs_path).parts[:-1]:
+            re_joined_zfs_path_parts = os.path.join(re_joined_zfs_path_parts, dataset)
+            if not self.has_dataset(re_joined_zfs_path_parts):
+                self._execute('zfs create "{}"'.format(re_joined_zfs_path_parts), capture_output=False)
+
+        restore_file_path = os.path.join(restore_source_dirpath, TARGET_STORAGE_SUBDIRECTORY, restore_dataset_zfs_path,
+                                         restore_snapshot + BACKUP_FILE_POSTFIX)
+        if self.remote:
+            command = self._get_ssh_command(self.remote)
+            command += shlex.quote(
+                'pv {} "{}"'.format(self._PV_DEFAULT_OPTIONS, restore_file_path))
+        else:
+            command = 'pv {} "{}"'.format(self._PV_DEFAULT_OPTIONS, restore_file_path)
+        command += ' | zfs recv -F "{}"'.format(os.path.join(restore_target_zfs_path, restore_dataset_zfs_path))
+
+        self._execute(command, capture_output=False)

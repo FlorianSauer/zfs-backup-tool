@@ -1,9 +1,9 @@
 import os
 import sys
-from typing import Dict, Tuple, Optional, Set, List
+from typing import Dict, Tuple, Optional, Set, cast
 
-from ..Constants import TARGET_STORAGE_SUBDIRECTORY, BACKUP_FILE_POSTFIX, EXPECTED_CHECKSUM_FILE_POSTFIX, \
-    CHECKSUM_FILE_POSTFIX
+from ..Constants import (TARGET_STORAGE_SUBDIRECTORY, BACKUP_FILE_POSTFIX, EXPECTED_CHECKSUM_FILE_POSTFIX,
+                         CHECKSUM_FILE_POSTFIX)
 from ..ShellCommand import ShellCommand, SshHost
 from ..ShellCommand.Base import CommandExecutionError
 from ..Zfs import Pool, Snapshot, PoolList
@@ -49,7 +49,7 @@ class BackupPlan(object):
         self.shell_command.set_remote_host(host)
 
         source_dataset = snapshot.dataset_path
-        if snapshot.has_increment_base():
+        if snapshot.has_incremental_base():
             previous_snapshot = snapshot.get_incremental_base().snapshot_name
         else:
             previous_snapshot = None
@@ -171,6 +171,32 @@ class BackupPlan(object):
                     os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
                                  next_snapshot + BACKUP_FILE_POSTFIX + EXPECTED_CHECKSUM_FILE_POSTFIX))
 
+    def _restore_snapshot_from_target(self, host: Optional[SshHost], target_paths: Set[str], snapshot: Snapshot,
+                                      restore_zfs_path: str):
+        self.shell_command.set_remote_host(host)
+        for i, target_path in enumerate(sorted(target_paths)):
+            print("Restoring backup snapshot {} from target {}...".format(
+                snapshot.zfs_path, target_path))
+            if self.dry_run:
+                print("Would have restored backup snapshot {} from target {}".format(
+                    snapshot.zfs_path, target_path))
+            else:
+                try:
+                    self.shell_command.zfs_recv_snapshot_from_target(target_path, snapshot.zfs_path, restore_zfs_path)
+                except CommandExecutionError as e:
+                    print(
+                        "Error restoring {} under {} from {}".format(snapshot.zfs_path, restore_zfs_path, target_path))
+                    if i + 1 < len(target_path):
+                        print("Trying next target...")
+                        continue
+                    else:
+                        print("all targets failed")
+                        print("Aborting...")
+                        sys.exit(1)
+            print("Restored backup snapshot {} from target {}".format(
+                snapshot.zfs_path, target_path))
+            break
+
     def _group_target_paths_by_host(self, given_pools: Dict[Tuple[Optional[SshHost], str], PoolList]
                                     ) -> Dict[Optional[SshHost], Dict[str, PoolList]]:
         host_targetpaths_pools: Dict[Optional[SshHost], Dict[str, PoolList]] = {}
@@ -189,12 +215,12 @@ class BackupPlan(object):
         for target_path in sorted(target_paths_pools.keys()):
             pools = target_paths_pools[target_path]
             for compare_paths, compare_pools in list(pool_target_paths.items()):
-                shared_pools = compare_pools.intersection(pools)
-                pools_leftovers = shared_pools.difference(pools)
+                shared_pools = pools.intersection(compare_pools)
+                pools_leftovers = pools.difference(shared_pools)
                 compare_pools_leftovers = shared_pools.difference(compare_pools)
                 if shared_pools.has_snapshots():
                     pool_target_paths.pop(compare_paths)
-                    new_shared_pools_key = compare_paths + (target_path,)
+                    new_shared_pools_key = cast(Tuple[str], compare_paths + (target_path,))
                     assert new_shared_pools_key not in pool_target_paths
                     pool_target_paths[new_shared_pools_key] = shared_pools
                 if compare_pools_leftovers.has_snapshots():
@@ -245,6 +271,7 @@ class BackupPlan(object):
                     self._write_snapshot_to_target(snapshot, host, {target_path})
 
             print()
+
     def repair_snapshots(self, repair_pools: Dict[Tuple[Optional[SshHost], str], PoolList]):
         """
         Repairs all snapshots in the given pools on the given (remote) targets.
@@ -266,7 +293,16 @@ class BackupPlan(object):
                     self._write_snapshot_to_target(snapshot, host, set(target_paths))
 
             print()
-    def restore_snapshots(self, restore_pools: Dict[Tuple[Optional[SshHost], str], PoolList]):
+
+    def restore_snapshots(self, restore_pools: Dict[Tuple[Optional[SshHost], str], PoolList],
+                          restore_target: Optional[str] = None, inplace: bool = False):
+        if inplace:
+            # use empty string as restore zfs path prefix.
+            # restorable snapshots get written to their original location
+            restore_target = ""
+        if restore_target is None:
+            raise ValueError("Restore target must be specified if not restoring inplace.")
+
         # group target paths by host
         host_targetpaths_pools = self._group_target_paths_by_host(restore_pools)
 
@@ -278,10 +314,9 @@ class BackupPlan(object):
             for target_paths, pools in pool_target_paths.items():
                 print("Reading snapshots from target paths: ", target_paths)
                 pools.print()
-                # for snapshot in pools.iter_snapshots():
-                #     print("Repairing snapshot: ", snapshot.zfs_path)
-                #     self._write_snapshot_to_target(snapshot, host, set(target_paths))
-
+                for snapshot in pools.iter_snapshots():
+                    print("Repairing snapshot: ", snapshot.zfs_path)
+                    self._restore_snapshot_from_target(host, set(target_paths), snapshot, restore_target)
             print()
 
     def backup_snapshots(self, backup_pools: Dict[Tuple[Optional[SshHost], str], PoolList]):

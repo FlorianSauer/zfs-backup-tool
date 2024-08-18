@@ -22,10 +22,21 @@ class Snapshot(object):
         # check the snapshot paths and other attributes
         return self.zfs_path == other.zfs_path
 
+    def __hash__(self):
+        return hash(self.zfs_path)
+
     def copy(self):
+        """
+        This method creates a new Snapshot object with the same pool name, dataset name, and snapshot name
+        as the current instance. However, the incremental base is not set in the new instance.
+        """
         return Snapshot(self.pool_name, self.dataset_name, self.snapshot_name)
 
     def view(self):
+        """
+        Creates a full copy of the current Snapshot instance including all sub-references.
+        Sub-references are also copied and not just referenced.
+        """
         view_snapshot = Snapshot(self.pool_name, self.dataset_name, self.snapshot_name)
         if self._incremental_base:
             view_snapshot._incremental_base = self._incremental_base.view()
@@ -33,7 +44,7 @@ class Snapshot(object):
         return view_snapshot
 
     def print(self):
-        if self.has_increment_base():
+        if self.has_incremental_base():
             assert self._incremental_index is not None
             assert self._incremental_index > 0
             assert self._incremental_index > (self._incremental_base._incremental_index or 0)
@@ -59,12 +70,12 @@ class Snapshot(object):
 
         new_merged_snapshot = cls(pool_name, dataset_name, snapshot_name)
 
-        incremental_bases = [snapshot.get_incremental_base() for snapshot in others if snapshot.has_increment_base()]
+        incremental_bases = [snapshot.get_incremental_base() for snapshot in others if snapshot.has_incremental_base()]
         if incremental_bases:
             new_merged_snapshot.set_incremental_base(cls.merge(pool_name, dataset_name, *incremental_bases))
         return new_merged_snapshot
 
-    def has_increment_base(self) -> bool:
+    def has_incremental_base(self) -> bool:
         return self._incremental_base is not None
 
     def set_incremental_base(self, base: 'Snapshot'):
