@@ -22,6 +22,7 @@ zfs create "devpool/dataset1/dataset1-1/dataset1-1-1"
 zfs create "devpool/dataset2"
 zfs create "devpool/dataset2/dataset2-1"
 zfs create "devpool/dataset2/dataset2-2"
+zfs create "devpool/dataset3"
 zfs snapshot -r "devpool@initial_snapshot"
 
 echo "ZFS pool created"
@@ -47,3 +48,10 @@ mkdir -p "$tmp_dir"
 (cd "$tmp_dir/zfs-backup-tool" && python3 ./zfs-backup-tool.py "$SCRIPT_DIR/dev_config_full_backup.conf" backup)
 # and verify the backups
 (cd "$tmp_dir/zfs-backup-tool" && python3 ./zfs-backup-tool.py "$SCRIPT_DIR/dev_config_full_backup.conf" verify)
+
+# cleanup temp dir
+rm -rf "$tmp_dir"
+
+# make sure the storage is writable after the backup
+chmod -R 777 /dev/shm/local_mirror_storage1
+chmod -R 777 /dev/shm/local_mirror_storage2
