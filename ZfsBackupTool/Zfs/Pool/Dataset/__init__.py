@@ -71,7 +71,8 @@ class DataSet(object):
         # the snapshot.view() cloning operates correctly, but for datasets, the incremental refs are not correct.
         # it is expected to have the incremental refs pointing to the same snapshot objects as in the original dataset
 
-        for snapshot in view_dataset:
+        # iterate SORTED snapshots to ensure incremental refs are set correctly from the beginning
+        for snapshot in self.sort_snapshots(view_dataset):
             if snapshot.has_incremental_base():
                 incremental_base = snapshot.get_incremental_base()
                 # we have to resolve the incremental base snapshot from the original dataset
@@ -80,9 +81,11 @@ class DataSet(object):
                     dataset_shared_incremental_base = view_dataset.snapshots[incremental_base.zfs_path]
                 except KeyError:
                     # the incremental base is not part of the view. This can happen, if the incremental base was
-                    # filtered out previously. In this case, we have to remove the incremental base from the current
-                    # snapshot
-                    snapshot.set_incremental_base(None)
+                    # filtered out previously. In this case, we have to create a pseudo incremental base snapshot
+                    # with the same name as the original incremental base snapshot.
+                    # with .view() this can cause a longer incremental chain. this is skipped and only a pseudo snapshot
+                    # is used as incremental base (.copy()).
+                    snapshot.set_incremental_base(incremental_base.copy())
                     continue
                 else:
                     snapshot.set_incremental_base(dataset_shared_incremental_base)
