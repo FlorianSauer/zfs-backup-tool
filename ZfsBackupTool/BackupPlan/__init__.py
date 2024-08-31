@@ -336,7 +336,7 @@ class BackupPlan(object):
                                       restore_zfs_path: str, force_receive=False):
         for i, (host, target_path) in enumerate(sorted(host_target_paths, key=lambda x: x[1])):
             self.shell_command.set_remote_host(host)
-            if self.shell_command.has_snapshot(snapshot.dataset_zfs_path, snapshot.snapshot_name):
+            if self.shell_command.has_snapshot(restore_zfs_path, snapshot.snapshot_name):
                 print("Snapshot {}@{} already exists under {}".format(
                     snapshot.dataset_zfs_path, snapshot.snapshot_name, restore_zfs_path))
                 if force_receive:
