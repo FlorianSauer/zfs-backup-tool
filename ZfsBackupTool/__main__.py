@@ -84,8 +84,6 @@ class ZfsBackupTool(object):
                                                           'WARNING: This will may cause temporary data loss.')
     restore_parser.add_argument('-f', '--filter',
                                 help='Perform restore only for datasets starting with given filter.')
-    restore_parser.add_argument('--force', action='store_true',
-                                help='Force restore, even if the target dataset exists has all expected snapshots.')
     verify_parser = subparsers.add_parser('verify', help='Verify datasets and their snapshots on targets.',
                                           description='Verify datasets and their snapshots on targets.')
     verify_parser.add_argument('-a', '--all', action='store_true',
@@ -414,12 +412,8 @@ class ZfsBackupTool(object):
 
         repair_pools: PoolList = PoolList()
         for source, remote_pool in configured_remote_pools_sources_mapping.items():
-            if self.cli_args.force:
-                # force restore, even if the target dataset exists and has all expected snapshots
-                repair_diff = remote_pool.view()
-            else:
-                local_pool = configured_local_pools_sources_mapping[source]
-                repair_diff = remote_pool.difference(local_pool)
+            local_pool = configured_local_pools_sources_mapping[source]
+            repair_diff = remote_pool.difference(local_pool)
             if self.cli_args.filter:
                 repair_diff = repair_diff.filter_include_by_zfs_path_prefix(self.cli_args.filter)
             if repair_diff.has_snapshots():
@@ -508,12 +502,12 @@ class ZfsBackupTool(object):
         if self.cli_args.restore == '.':
             # inplace restore
             self.backup_plan.restore_snapshots(repair_snapshot_restore_source_mapping,
-                                               inplace=True, force_receive=self.cli_args.force)
+                                               inplace=True)
         else:
             # restore to given path
             self.backup_plan.restore_snapshots(repair_snapshot_restore_source_mapping,
                                                restore_target=self.cli_args.restore,
-                                               inplace=False, force_receive=self.cli_args.force)
+                                               inplace=False)
 
     def do_verify(self):
         # scan local zfs setup

@@ -333,23 +333,16 @@ class BackupPlan(object):
 
     def _restore_snapshot_from_target(self, host_target_paths: List[Tuple[Optional[SshHost], str]],
                                       snapshot: Snapshot,
-                                      restore_zfs_path: str, force_receive=False):
+                                      restore_zfs_path: str):
         for i, (host, target_path) in enumerate(sorted(host_target_paths, key=lambda x: x[1])):
             self.shell_command.set_remote_host(host)
             if self.shell_command.has_snapshot(restore_zfs_path, snapshot.snapshot_name):
                 print("Snapshot {}@{} already exists under {}".format(
                     snapshot.dataset_zfs_path, snapshot.snapshot_name, restore_zfs_path))
-                if force_receive:
-                    if self.dry_run:
-                        print("Would have destroyed existing snapshot {}@{}".format(
-                            restore_zfs_path, snapshot.snapshot_name))
-                    else:
-                        self.shell_command.delete_snapshot("{}@{}".format(restore_zfs_path, snapshot.snapshot_name))
-                else:
-                    print("Cannot restore snapshot {}@{} under {} because it already exists".format(
+                print("Cannot restore snapshot {}@{} under {} because it already exists".format(
                         snapshot.dataset_zfs_path, snapshot.snapshot_name, restore_zfs_path))
-                    print("Aborting...")
-                    sys.exit(1)
+                print("Aborting...")
+                sys.exit(1)
 
             print("Restoring backup snapshot {} from target {}...".format(
                 snapshot.zfs_path, target_path))
@@ -446,8 +439,7 @@ class BackupPlan(object):
             print()
 
     def restore_snapshots(self, restore_snapshots: List[Tuple[Snapshot, List[Tuple[Optional[SshHost], str]]]],
-                          restore_target: Optional[str] = None, inplace: bool = False,
-                          force_receive: bool = False):
+                          restore_target: Optional[str] = None, inplace: bool = False):
         if not inplace and restore_target is None:
             raise ValueError("Restore target must be specified if not restoring inplace.")
         if restore_target:
@@ -460,7 +452,7 @@ class BackupPlan(object):
                 assert restore_target
                 restore_target = os.path.join(restore_target, snapshot.dataset_zfs_path)
             print("Repairing snapshot '{}' into '{}'".format(snapshot.zfs_path, restore_target))
-            self._restore_snapshot_from_target(sources, snapshot, restore_target, force_receive=force_receive)
+            self._restore_snapshot_from_target(sources, snapshot, restore_target)
 
     def backup_snapshots(self, backup_pools: Dict[Tuple[Optional[SshHost], str], PoolList]):
         """
