@@ -494,7 +494,15 @@ class ZfsBackupTool(object):
                                                                                remote_pools_host_paths_mapping)
 
         # we now have a list of snapshots and the host-target-path-mappings from where we can fetch the repair data from
-        self.backup_plan.restore_snapshots(repair_snapshot_restore_source_mapping, inplace=True)
+        if self.cli_args.restore == '.':
+            # inplace restore
+            self.backup_plan.restore_snapshots(repair_snapshot_restore_source_mapping,
+                                               inplace=True)
+        else:
+            # restore to given path
+            self.backup_plan.restore_snapshots(repair_snapshot_restore_source_mapping,
+                                               restore_target=self.cli_args.restore,
+                                               inplace=False)
 
     def do_verify(self):
         # scan local zfs setup
