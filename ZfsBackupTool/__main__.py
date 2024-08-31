@@ -12,7 +12,7 @@ from ZfsBackupTool.Config import TargetGroup, BackupSource
 from ZfsBackupTool.Constants import SNAPSHOT_PREFIX_POSTFIX_SEPARATOR, INITIAL_SNAPSHOT_POSTFIX, \
     TARGET_STORAGE_SUBDIRECTORY, INITIALIZED_FILE_NAME
 from ZfsBackupTool.ShellCommand import ShellCommand, SshHost
-from ZfsBackupTool.Zfs import scan_zfs_pools, PoolList, DataSet
+from ZfsBackupTool.Zfs import scan_zfs_pools, PoolList, DataSet, ZfsResolveError
 
 
 # region setup helper class for environment expanding in config file
@@ -449,7 +449,7 @@ class ZfsBackupTool(object):
                 fully_available_dataset = all_remote_configured_pools.get_dataset_by_path(dataset.zfs_path)
                 try:
                     current_local_dataset = all_local_configured_pools.get_dataset_by_path(dataset.zfs_path)
-                except KeyError:
+                except ZfsResolveError:
                     # the whole dataset is missing on local -> copy the remote dataset object without snapshots.
                     current_local_dataset = fully_available_dataset.copy()
                 logical_full_dataset = DataSet.merge(pool.pool_name,
