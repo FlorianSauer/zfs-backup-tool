@@ -79,7 +79,9 @@ class ZfsBackupTool(object):
                                help='Perform backup only to targets starting with given filter.')
     restore_parser = subparsers.add_parser('restore', help='Perform restore into given root path.',
                                            description='Perform restore into given root path.')
-    restore_parser.add_argument('restore', type=str, help='Perform restore into given root path.')
+    restore_parser.add_argument('restore', type=str, help='Perform restore into given root path. '
+                                                          'Use . for inplace restore. '
+                                                          'WARNING: This will may cause temporary data loss.')
     restore_parser.add_argument('-f', '--filter',
                                 help='Perform restore only for datasets starting with given filter.')
     verify_parser = subparsers.add_parser('verify', help='Verify datasets and their snapshots on targets.',
