@@ -1,7 +1,7 @@
 import os
 import sys
 from itertools import combinations
-from typing import Dict, Tuple, Optional, Set, List
+from typing import Dict, Tuple, Optional, Set, List, cast
 
 from ..Constants import (TARGET_STORAGE_SUBDIRECTORY, BACKUP_FILE_POSTFIX, EXPECTED_CHECKSUM_FILE_POSTFIX,
                          CALCULATED_CHECKSUM_FILE_POSTFIX)
@@ -71,7 +71,8 @@ class BackupPlan(object):
 
     def _checksum_verify_helper(self, target_paths: List[str], snapshot: Snapshot,
                                 expected_checksums: Dict[str, Optional[str]],
-                                calculated_checksums: Dict[str, Optional[str]]) -> Dict[str, Tuple[str, str]]:
+                                calculated_checksums: Dict[str, Optional[str]]
+                                ) -> Dict[str, Tuple[Optional[str], Optional[str]]]:
         mismatching_checksums = {}
         for target_path in target_paths:
             expected_checksum = expected_checksums[target_path]
@@ -145,8 +146,8 @@ class BackupPlan(object):
         # if the calculated checksum is missing, recalculate it
         if not all(calculated_checksums.values()):
             # map the full file_path on target to the short target path
-            uncalculated_paths = {os.path.join(tp, TARGET_STORAGE_SUBDIRECTORY, snapshot.dataset_zfs_path,
-                                               snapshot.snapshot_name + BACKUP_FILE_POSTFIX): tp
+            uncalculated_paths = {tp: os.path.join(tp, TARGET_STORAGE_SUBDIRECTORY, snapshot.dataset_zfs_path,
+                                               snapshot.snapshot_name + BACKUP_FILE_POSTFIX)
                                   for tp, cs in calculated_checksums.items()
                                   if not cs  # only recalculate if the checksum is missing
                                   and expected_checksums[tp]  # we need the expected checksum for verification
@@ -154,11 +155,10 @@ class BackupPlan(object):
             # for missing_expected_checksum_path in [tp for tp, cs in expected_checksums.items() if not cs]:
 
             if self.dry_run:
-                re_calculated_checksums = {file_path: "dry-run" for file_path in uncalculated_paths.keys()}
+                re_calculated_checksums = {tp: "dry-run" for tp in uncalculated_paths.keys()}
             else:
-                re_calculated_checksums = self.shell_command.target_get_checksums(set(uncalculated_paths.keys()))
-            for file_path, calculated_checksum in re_calculated_checksums.items():
-                target_path = uncalculated_paths[file_path]
+                re_calculated_checksums = self.shell_command.target_get_checksums(uncalculated_paths)
+            for target_path, calculated_checksum in re_calculated_checksums.items():
                 if calculated_checksums[target_path]:
                     raise RuntimeError("Calculated checksum already exists for backup {}@{} on target {}".format(
                         snapshot.dataset_zfs_path, snapshot.snapshot_name, target_path))
@@ -206,7 +206,7 @@ class BackupPlan(object):
 
         # repair the snapshot on the target pool
         if repair:
-            missing_calculated_checksum = {}
+            missing_calculated_checksum: Dict[str, Optional[str]] = {}
             for target_path in list(target_paths):
                 backup_file_path = os.path.join(
                     target_path, TARGET_STORAGE_SUBDIRECTORY, snapshot.dataset_zfs_path,
@@ -247,21 +247,21 @@ class BackupPlan(object):
 
             if missing_calculated_checksum:
                 print("Calculating missing checksums...")
-                backup_files = {os.path.join(tp, TARGET_STORAGE_SUBDIRECTORY, snapshot.dataset_zfs_path,
-                                             snapshot.snapshot_name + BACKUP_FILE_POSTFIX): tp
+                backup_files = {tp: os.path.join(tp, TARGET_STORAGE_SUBDIRECTORY, snapshot.dataset_zfs_path,
+                                             snapshot.snapshot_name + BACKUP_FILE_POSTFIX)
                                 for tp in missing_calculated_checksum.keys()}
                 if self.dry_run:
-                    checksums = {file_path: "dry-run" for file_path in backup_files.keys()}
+                    checksums: Dict[str, Optional[str]] = {tp: "dry-run" for tp in backup_files.keys()}
                 else:
-                    checksums = self.shell_command.target_get_checksums(set(backup_files.keys()))
+                    checksums = self.shell_command.target_get_checksums(backup_files)
                 invalid_checksums = self._checksum_verify_helper(list(missing_calculated_checksum.keys()), snapshot,
                                                                  missing_calculated_checksum, checksums)
                 if invalid_checksums:
-                    for target_path, (expected_checksum, calculated_checksum) in invalid_checksums.items():
+                    for target_path, (_expected_checksum, _calculated_checksum) in invalid_checksums.items():
                         print("Checksum mismatch for backup {}@{} on target {}".format(
                             snapshot.dataset_zfs_path, snapshot.snapshot_name, target_path))
-                        print("Expected checksum: {}".format(expected_checksum))
-                        print("Calculated checksum: {}".format(calculated_checksum))
+                        print("Expected checksum: {}".format(_expected_checksum))
+                        print("Calculated checksum: {}".format(_calculated_checksum))
                         print("Scheduled for repair.")
 
                 # filter out the target paths, which have a valid checksum
@@ -309,12 +309,12 @@ class BackupPlan(object):
         # verify the written backups
         print("Verifying written backups...")
         if self.dry_run:
-            read_checksums = {tp: "dry-run" for tp in target_paths}
+            read_checksums: Dict[str, Optional[str]] = {tp: "dry-run" for tp in target_paths}
         else:
-            backup_files = {os.path.join(tp, TARGET_STORAGE_SUBDIRECTORY, snapshot.dataset_zfs_path,
-                                         snapshot.snapshot_name + BACKUP_FILE_POSTFIX): tp
+            backup_files = {tp: os.path.join(tp, TARGET_STORAGE_SUBDIRECTORY, snapshot.dataset_zfs_path,
+                                         snapshot.snapshot_name + BACKUP_FILE_POSTFIX)
                             for tp in target_paths}
-            read_checksums = self.shell_command.target_get_checksums(set(backup_files.keys()))
+            read_checksums = self.shell_command.target_get_checksums(backup_files)
 
         invalid_checksums = self._checksum_verify_helper(list(target_paths), snapshot,
                                                          {tp: expected_checksum for tp in target_paths}, read_checksums)
@@ -322,179 +322,6 @@ class BackupPlan(object):
         if invalid_checksums:
             print("Aborting...")
             sys.exit(1)
-
-    def _write_snapshot_to_target_old(self, snapshot: Snapshot, host: Optional[SshHost], target_paths: Set[str],
-                                      overwrite: bool = False):
-        # repair the snapshot on the target pool
-        self.shell_command.set_remote_host(host)
-
-        source_dataset = snapshot.dataset_zfs_path
-        if snapshot.has_incremental_base():
-            previous_snapshot = snapshot.get_incremental_base().snapshot_name
-        else:
-            previous_snapshot = None
-        next_snapshot = snapshot.snapshot_name
-
-        for complete_target in target_paths:
-            if not self.dry_run:
-                self.shell_command.target_mkdir(
-                    os.path.join(complete_target, TARGET_STORAGE_SUBDIRECTORY, source_dataset))
-
-        target_path_files = {}
-        for complete_target in target_paths:
-            full_path = os.path.join(complete_target, TARGET_STORAGE_SUBDIRECTORY, source_dataset)
-            if self.shell_command.target_dir_exists(full_path):
-                target_path_files[complete_target] = self.shell_command.target_list_directory(full_path)[0]
-            else:
-                target_path_files[complete_target] = []
-
-        skip_zfs_send = False
-        skip_verification = False
-        backup_checksum = None
-
-        if not overwrite:
-            remotes_have_snapshot_file = {
-                tp: next_snapshot + BACKUP_FILE_POSTFIX in target_path_files[tp]
-                    and next_snapshot + BACKUP_FILE_POSTFIX + EXPECTED_CHECKSUM_FILE_POSTFIX in target_path_files[tp]
-                    and next_snapshot + BACKUP_FILE_POSTFIX + CALCULATED_CHECKSUM_FILE_POSTFIX in target_path_files[tp]
-                for tp in target_paths}
-            if all(remotes_have_snapshot_file.values()):
-                print("Backup {}@{} already exists on all targets and checksums were written.".format(
-                    source_dataset, next_snapshot))
-                skip_zfs_send = True
-                skip_verification = True
-            else:
-                print("Unusual State detected: checksum file missing on some targets. "
-                      "Backups seem to be incomplete.")
-
-                # filter out targets, which have the snapshot file AND the checksum file
-                # AND where the checksums match
-
-                for complete_target in [tp for tp in target_paths if remotes_have_snapshot_file[tp]]:
-                    # checksum exists, we do NOT verify it with this method
-                    # verification is done in a separate step
-                    # but we can skip the repair/rewrite of the file-valid backups
-                    target_paths.remove(complete_target)
-
-                re_verification_targets = []
-
-                for incomplete_target in [tp for tp in target_paths if not remotes_have_snapshot_file[tp]]:
-                    # check if the snapshot file exists at all
-                    if next_snapshot + BACKUP_FILE_POSTFIX not in target_path_files[incomplete_target]:
-                        print("Backup {}@{} does not exist at all on target {}".format(
-                            source_dataset, next_snapshot, incomplete_target))
-                        continue
-                    elif next_snapshot + BACKUP_FILE_POSTFIX + EXPECTED_CHECKSUM_FILE_POSTFIX not in target_path_files[
-                        incomplete_target]:
-                        print("Expected checksum file missing for backup {}@{} on target {}.".format(
-                            source_dataset, next_snapshot, incomplete_target))
-                    elif next_snapshot + BACKUP_FILE_POSTFIX + CALCULATED_CHECKSUM_FILE_POSTFIX not in \
-                            target_path_files[
-                                incomplete_target]:
-                        print("Calculated checksum file missing for backup {}@{} on target {}.".format(
-                            source_dataset, next_snapshot, incomplete_target))
-                        # we can skip the repair/rewrite of the file-valid backups
-                        re_verification_targets.append(incomplete_target)
-
-                if re_verification_targets:
-                    print("Re-verifying backups on targets: {}".format(re_verification_targets))
-                    checksums_ok = self._verify_snapshot_on_target(snapshot, host, re_verification_targets)
-                    if not checksums_ok:
-                        print("Aborting...")
-                        sys.exit(1)
-                    print("Re-verification done.")
-                    # we can skip the repair/rewrite of the file-valid backups
-                    skip_zfs_send = True
-                    skip_verification = True
-
-                remotes_have_temporary_checksum_file = (
-                    next_snapshot + BACKUP_FILE_POSTFIX + EXPECTED_CHECKSUM_FILE_POSTFIX in target_path_files[tp]
-                    for tp in target_paths
-                )
-                if any(remotes_have_temporary_checksum_file):
-                    for complete_target in target_paths:
-                        try:
-                            backup_checksum = self.shell_command.target_read_checksum_from_file(
-                                os.path.join(complete_target, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
-                                             next_snapshot + BACKUP_FILE_POSTFIX + EXPECTED_CHECKSUM_FILE_POSTFIX))
-                        except CommandExecutionError:
-                            pass
-                        else:
-                            print('Found checksum for backup "{}@{}" on target "{}": {}'.format(
-                                source_dataset, next_snapshot, complete_target, backup_checksum))
-                            break
-                    if backup_checksum:
-                        print('Skipping re-writing of backup "{}@{}" because it already exists on all targets and '
-                              'a checksum was found.'.format(source_dataset, next_snapshot))
-                        skip_zfs_send = True
-            # else:
-            #     print("Unusual State detected: Backup {}@{} does not exist on any target.".format(
-            #         source_dataset, next_snapshot))
-
-        if not skip_zfs_send:
-            print("Transmitting backup snapshot {}@{} to target(s): {}...".format(
-                source_dataset, next_snapshot, ", ".join(sorted(target_paths))))
-            if self.dry_run:
-                backup_checksum = "dry-run"
-                if previous_snapshot:
-                    print("Would have sent incremental backup from {}@{} to {}@{}".format(
-                        source_dataset, previous_snapshot, source_dataset, next_snapshot))
-                else:
-                    print("Would have sent full backup from {}@{}".format(source_dataset, next_snapshot))
-            else:
-                backup_checksum = self.shell_command.zfs_send_snapshot_to_target(
-                    source_dataset,
-                    previous_snapshot,
-                    next_snapshot,
-                    target_paths,
-                    include_intermediate_snapshots=self.include_intermediate_snapshots)
-            print("Created backup snapshot {}@{} with checksum {}".format(
-                source_dataset, next_snapshot, backup_checksum))
-
-            # after transmission, write checksum to temporary file on target
-            # it gets replaced later by the 'final' checksum file
-            for complete_target in target_paths:
-                if not self.dry_run:
-                    self.shell_command.target_write_to_file(
-                        os.path.join(complete_target, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
-                                     next_snapshot + BACKUP_FILE_POSTFIX + EXPECTED_CHECKSUM_FILE_POSTFIX),
-                        "{} ./{}".format(backup_checksum, next_snapshot + BACKUP_FILE_POSTFIX))
-        else:
-            assert backup_checksum
-
-        if not skip_verification:
-            print("Verifying written backups...")
-            if self.dry_run:
-                read_checksums = {tp: "dry-run" for tp in target_paths}
-            else:
-                read_checksums = self.shell_command.target_get_checksums(source_dataset, next_snapshot, target_paths)
-            checksums_ok = False
-            for complete_target, read_checksum in read_checksums.items():
-                if read_checksum != backup_checksum:
-                    print("Checksum mismatch for backup {}@{} on target {}".format(
-                        source_dataset, next_snapshot, complete_target))
-                    print("Expected checksum: {}".format(backup_checksum))
-                    print("Read checksum: {}".format(read_checksum))
-                    checksums_ok = True
-                else:
-                    print("Checksum verified for backup {}@{} on target {}".format(
-                        source_dataset, next_snapshot, complete_target))
-            if checksums_ok:
-                print("Aborting...")
-                sys.exit(1)
-
-            for complete_target in target_paths:
-                if not self.dry_run:
-                    self.shell_command.target_write_to_file(
-                        os.path.join(complete_target, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
-                                     next_snapshot + BACKUP_FILE_POSTFIX + EXPECTED_CHECKSUM_FILE_POSTFIX),
-                        "{} ./{}".format(backup_checksum, next_snapshot + BACKUP_FILE_POSTFIX))
-
-        for complete_target in target_paths:
-            if not self.dry_run:
-                self.shell_command.target_remove_file(
-                    os.path.join(complete_target, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
-                                 next_snapshot + BACKUP_FILE_POSTFIX + EXPECTED_CHECKSUM_FILE_POSTFIX))
 
     def _restore_snapshot_from_target(self, host_target_paths: List[Tuple[Optional[SshHost], str]],
                                       snapshot: Snapshot,
@@ -545,7 +372,7 @@ class BackupPlan(object):
         fill_list = [None, ] * (len(target_paths_pools) - 1)
         for _compare_base_paths in combinations(fill_list + list(target_paths_pools.keys()), len(target_paths_pools)):
             # filter out the None values
-            compare_base_paths: Tuple[str] = tuple(filter(None, _compare_base_paths))
+            compare_base_paths: Tuple[str] = cast(Tuple[str], tuple(filter(None, _compare_base_paths)))
 
             if len(compare_base_paths) == 1:
                 # we have only one target path, so we have to 'cut off' the elements that are not shared
@@ -573,46 +400,6 @@ class BackupPlan(object):
                 pool_target_paths.pop(target_path)
         return pool_target_paths
 
-    def repair_snapshots_old(self, repair_pools: Dict[Tuple[Optional[SshHost], str], PoolList]):
-        """
-        Repairs missing snapshots in the given pools on the given targets.
-        Equal targets get grouped together, to reduce transmitted data.
-        """
-        # group target paths by host
-        host_targetpaths_pools = self._group_target_paths_by_host(repair_pools)
-
-        # iterate over all hosts, group pools from different target paths together, to repair them in one go
-        for host, targetpaths_pools in host_targetpaths_pools.items():
-            target_path_all_repair_pools = PoolList.merge(*targetpaths_pools.values())
-            target_path_shared_repair_pools = target_path_all_repair_pools.intersection(
-                *targetpaths_pools.values())
-            self.shell_command.set_remote_host(host)
-
-            # filter out all snapshots, that are missing in all target paths
-            print("Fully missing snapshots:")
-            fully_missing_snapshots = target_path_shared_repair_pools.view()
-            for pools in targetpaths_pools.values():
-                fully_missing_snapshots = pools.intersection(fully_missing_snapshots)
-            fully_missing_snapshots.print()
-
-            # iter snapshots, repair them
-            for snapshot in fully_missing_snapshots.iter_snapshots():
-                print("Repairing snapshot: ", snapshot.zfs_path)
-                assert all(snapshot in pools.iter_snapshots() for pools in targetpaths_pools.values())
-                self._write_snapshot_to_target(snapshot, host, set(targetpaths_pools.keys()))
-
-            # filter out all snapshots, that are missing in at least one target path
-            print("Partially missing snapshots:")
-            for target_path, pools in targetpaths_pools.items():
-                partially_missing_snapshots = target_path_shared_repair_pools.difference(pools)
-                print("Target path: ", target_path)
-                partially_missing_snapshots.print()
-                for snapshot in partially_missing_snapshots.iter_snapshots():
-                    print("Repairing snapshot: ", snapshot.zfs_path)
-                    self._write_snapshot_to_target(snapshot, host, {target_path})
-
-            print()
-
     def repair_snapshots(self, repair_pools: Dict[Tuple[Optional[SshHost], str], PoolList]):
         """
         Repairs all snapshots in the given pools on the given (remote) targets.
@@ -639,12 +426,14 @@ class BackupPlan(object):
                           restore_target: Optional[str] = None, inplace: bool = False):
         if not inplace and restore_target is None:
             raise ValueError("Restore target must be specified if not restoring inplace.")
-        assert not restore_target.startswith('/')
+        if restore_target:
+            assert not restore_target.startswith('/')
 
         for snapshot, sources in restore_snapshots:
             if inplace:
                 restore_target = snapshot.dataset_zfs_path
             else:
+                assert restore_target
                 restore_target = os.path.join(restore_target, snapshot.dataset_zfs_path)
             print("Repairing snapshot '{}' into '{}'", snapshot.zfs_path)
             self._restore_snapshot_from_target(sources, snapshot, restore_target)

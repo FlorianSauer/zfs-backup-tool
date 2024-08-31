@@ -104,9 +104,9 @@ class BaseShellCommand(object):
             if sub_process.returncode != 0:
                 if capture_output and capture_stderr:
                     stderr_data = sub_process.stderr.read().decode('utf-8') if sub_process.stderr else ""
-                    raise CommandExecutionError(sub_process, "Error executing command > {} <\n{}".format(
+                    raise CommandExecutionError(sub_process, "Error executing command: {}\n{}".format(
                         str(sub_process.args), stderr_data))
-                raise CommandExecutionError(sub_process, "Error executing command > {} <".format(
+                raise CommandExecutionError(sub_process, "Error executing command: {}".format(
                     str(sub_process.args)))
         return sub_process
 

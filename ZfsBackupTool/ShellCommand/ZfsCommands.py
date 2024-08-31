@@ -93,11 +93,11 @@ class ZfsCommands(BaseShellCommand):
         # with temporary file
         with tempfile.NamedTemporaryFile() as tmp:
             if previous_snapshot:
-                command = 'zfs send --raw {} "{}@{}" "{}@{}" '.format(
+                command = 'set -o pipefail; zfs send --raw {} "{}@{}" "{}@{}" '.format(
                     "-I" if include_intermediate_snapshots else '-i',
                     source_dataset, previous_snapshot, source_dataset, next_snapshot)
             else:
-                command = 'zfs send --raw "{}@{}"'.format(source_dataset, next_snapshot)
+                command = 'set -o pipefail; zfs send --raw "{}@{}"'.format(source_dataset, next_snapshot)
 
             command += ' | tee >( sha256sum -b > "{}" )'.format(tmp.name)
             command += ' | pv {} --size {}'.format(self._PV_DEFAULT_OPTIONS, estimated_size)

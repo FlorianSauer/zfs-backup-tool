@@ -4,13 +4,15 @@ import sys
 import threading
 from pathlib import Path
 from subprocess import Popen
-from typing import List, Tuple, Dict, Set, cast, IO
+from typing import List, Tuple, Dict, Set, cast, IO, TypeVar
 
 from .Base import BaseShellCommand, CommandExecutionError, PipePrinterThread
 from ..Constants import CALCULATED_CHECKSUM_FILE_POSTFIX
 
 
 class FsCommands(BaseShellCommand):
+    I = TypeVar('I')
+
 
     def __init__(self, echo_cmd=False):
         super().__init__(echo_cmd)
@@ -157,7 +159,7 @@ class FsCommands(BaseShellCommand):
 
         return sub_process, command
 
-    def target_get_checksums(self, file_paths: Set[str]):
+    def target_get_checksums(self, file_paths: Dict[I, str]) -> Dict[I, str]:
         output_dict: Dict[str, str] = {}
         print_lock = threading.Lock()
 
@@ -166,20 +168,14 @@ class FsCommands(BaseShellCommand):
 
         target_process_printer_mapping: Dict[str, Tuple[Popen, PipePrinterThread]] = {}
 
-        # find common path prefix
-        common_prefix = str(os.path.commonpath(*file_paths))
-
-        for file_index, file_path in enumerate(sorted(file_paths)):
-            # build pv_name, by using the common prefix as base and ONE filepath part of the file path
-            pv_name = os.path.join(common_prefix,
-                                   Path(file_path.replace(common_prefix, '', 1)).parts[0])
-            pv_process, command = self._target_get_checksum(file_path, pv_name)
+        for file_index, pv_name in enumerate(sorted(file_paths.keys())):
+            pv_process, command = self._target_get_checksum(file_paths[pv_name], pv_name)
             stderr_printer = PipePrinterThread(cast(IO[bytes], pv_process.stderr), sys.stderr.buffer, file_index,
                                                print_lock)
             if file_index > 0:
                 sys.stderr.write('\n\r')
 
-            target_process_printer_mapping[file_path] = (pv_process, stderr_printer)
+            target_process_printer_mapping[pv_name] = (pv_process, stderr_printer)
 
         sys.stdout.flush()
         sys.stderr.flush()
@@ -208,13 +204,13 @@ class FsCommands(BaseShellCommand):
             sys.stdout.flush()
             sys.stderr.flush()
 
-        for file_path, (pv_process, stderr_printer) in target_process_printer_mapping.items():
+        for pv_name, (pv_process, stderr_printer) in target_process_printer_mapping.items():
             stderr_printer.join()
             if pv_process.returncode != 0:
                 raise CommandExecutionError(pv_process, "Error executing command > {} <".format(str(pv_process.args)))
 
-            checksum_file = file_path + CALCULATED_CHECKSUM_FILE_POSTFIX
+            checksum_file = file_paths[pv_name] + CALCULATED_CHECKSUM_FILE_POSTFIX
             checksum = self.target_read_checksum_from_file(checksum_file)
-            output_dict[file_path] = checksum
+            output_dict[pv_name] = checksum
 
         return output_dict
