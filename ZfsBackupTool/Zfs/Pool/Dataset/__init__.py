@@ -237,9 +237,9 @@ class DataSet(object):
         """
         thinned_out_view = self.view()
         for snapshot in list(thinned_out_view.iter_snapshots()):
+            thinned_out_view.remove_snapshot(snapshot)
             if snapshot == parent:
                 break
-            thinned_out_view.remove_snapshot(snapshot)
         return thinned_out_view
 
     def build_incremental_snapshot_refs(self) -> None:

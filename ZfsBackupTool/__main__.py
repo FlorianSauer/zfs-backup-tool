@@ -84,6 +84,8 @@ class ZfsBackupTool(object):
                                                           'WARNING: This will may cause temporary data loss.')
     restore_parser.add_argument('-f', '--filter',
                                 help='Perform restore only for datasets starting with given filter.')
+    restore_parser.add_argument('--force', action='store_true',
+                                help='Force restore, even if the target path is not empty.')
     verify_parser = subparsers.add_parser('verify', help='Verify datasets and their snapshots on targets.',
                                           description='Verify datasets and their snapshots on targets.')
     verify_parser.add_argument('-a', '--all', action='store_true',
@@ -443,10 +445,11 @@ class ZfsBackupTool(object):
         all_remote_configured_pools = PoolList.merge(*configured_remote_pools_sources_mapping.values())
         all_local_configured_pools = PoolList.merge(*configured_local_pools_sources_mapping.values())
 
-        repair_pools_with_intermediate_children: PoolList = PoolList()
+        intermediate_children_of_repair_pools: PoolList = PoolList()
+        abort_due_to_existing_intermediate_snapshots = False
         for pool in repair_pools:
             repair_pool = pool.copy()
-            repair_pools_with_intermediate_children.add_pool(repair_pool)
+            intermediate_children_of_repair_pools.add_pool(repair_pool)
             for dataset in pool:
                 # resolve the dataset on the remote side which contains all snapshots from the first missing snapshot
                 # up to the latest snapshot
@@ -480,16 +483,16 @@ class ZfsBackupTool(object):
                 if incremental_children_dataset.intersection(current_local_dataset).has_snapshots():
                     print("Intermediate snapshots are existing on the local side")
                     print("This would fail the restore process")
-                    print("We need to repair the local side first")
-                    print("needed snapshots for full restore:")
-                    incremental_children_dataset.print()
-                    print("existing intermediate snapshots:")
-                    incremental_children_dataset.intersection(current_local_dataset).print()
-                    print("Remote available snapshots:")
-                    fully_available_dataset.print()
-                    print("Local available snapshots:")
-                    current_local_dataset.print()
-                    return
+                    if self.cli_args.force:
+                        print("removing existing intermediate snapshots on local side")
+                        self.backup_plan.clean_snapshots(
+                            incremental_children_dataset.intersection(current_local_dataset),
+                            zfs_path_filter=self.cli_args.filter)
+                    else:
+                        print("The following intermediate snapshots need to be removed on the local side")
+                        incremental_children_dataset.intersection(current_local_dataset).print()
+                        print("Use --force to remove them")
+                        abort_due_to_existing_intermediate_snapshots = True
 
                 # verify that no intermediate snapshot is missing
                 if any(not snapshot.has_incremental_base()
@@ -501,11 +504,16 @@ class ZfsBackupTool(object):
 
                 repair_pool.add_dataset(incremental_children_dataset)
 
-        print("hard missing snapshots with intermediate children")
-        repair_pools_with_intermediate_children.print()
+        if abort_due_to_existing_intermediate_snapshots:
+            print("Aborting due to existing intermediate snapshots on local side")
+            return
 
         # we now have a list of pools/datasets/snapshots that need to be repaired
         # we will now find out, where we can fetch the repair data from
+        print("hard missing snapshots with intermediate children")
+        repair_pools_with_intermediate_children = PoolList.merge(repair_pools, intermediate_children_of_repair_pools)
+        repair_pools_with_intermediate_children.print()
+
 
         # we only need the snapshot objects in the correct order and the host-target-path-mappings from where to fetch
         # the snapshot data from
