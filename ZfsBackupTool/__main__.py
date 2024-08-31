@@ -569,6 +569,7 @@ class ZfsBackupTool(object):
                         verify_pools[(target_group.remote, target_path)] = verify_diff
 
         self.backup_plan.verify_snapshots(verify_pools, self.cli_args.remove_corrupted)
+        print("Verification done.")
 
     def _itemize_option(self, option_content: Optional[str]) -> List[str]:
         if not option_content:
