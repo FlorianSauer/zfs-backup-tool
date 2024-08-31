@@ -92,7 +92,7 @@ class ZfsBackupTool(object):
                                help='Perform verification only for datasets starting with given filter.')
     verify_parser.add_argument('-t', '--target-filter',
                                help='Perform verification only on targets starting with given filter.')
-    verify_parser.add_argument('--remove-corrupted', action='store_true',
+    verify_parser.add_argument('-r', '--remove-corrupted', action='store_true',
                                help='DESTRUCTIVE OPERATION: Remove corrupted files from targets. '
                                     'Detected corrupted files are removed from the target and can be re-created with '
                                     '\'backup --missing\'')
