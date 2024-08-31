@@ -115,7 +115,10 @@ class ZfsBackupTool(object):
         self.cli_args = self.cli_parser.parse_args(sys.argv[1:])
         self.shell_command = ShellCommand(echo_cmd=self.cli_args.debug)
         self.config = self._load_config(self.cli_args.config)
-        self.backup_plan = BackupPlan(self.shell_command, dry_run=self.cli_args.dry_run)
+        self.backup_plan = BackupPlan(self.shell_command,
+                                      include_intermediate_snapshots=self.config.include_intermediate_snapshots,
+                                      dry_run=self.cli_args.dry_run
+                                      )
 
         try:
             # self.do_check_programs_installed()

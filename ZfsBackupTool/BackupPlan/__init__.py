@@ -258,11 +258,12 @@ class BackupPlan(object):
                                              snapshot.snapshot_name + BACKUP_FILE_POSTFIX)
                                 for tp in missing_calculated_checksum.keys()}
                 if self.dry_run:
-                    checksums: Dict[str, Optional[str]] = {tp: "dry-run" for tp in backup_files.keys()}
+                    checksums = {tp: "dry-run" for tp in backup_files.keys()}
                 else:
                     checksums = self.shell_command.target_get_checksums(backup_files)
                 invalid_checksums = self._checksum_verify_helper(list(missing_calculated_checksum.keys()), snapshot,
-                                                                 missing_calculated_checksum, checksums)
+                                                                 missing_calculated_checksum,
+                                                                 cast(Dict[str, Optional[str]], checksums))
                 if invalid_checksums:
                     for target_path, (_expected_checksum, _calculated_checksum) in invalid_checksums.items():
                         print("Checksum mismatch for backup {}@{} on target {}".format(
