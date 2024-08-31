@@ -476,6 +476,21 @@ class ZfsBackupTool(object):
                     current_local_dataset.print()
                     return
 
+                # verify that the intermediate needed snapshots are not existing on the local side
+                if incremental_children_dataset.intersection(current_local_dataset).has_snapshots():
+                    print("Intermediate snapshots are existing on the local side")
+                    print("This would fail the restore process")
+                    print("We need to repair the local side first")
+                    print("needed snapshots for full restore:")
+                    incremental_children_dataset.print()
+                    print("existing intermediate snapshots:")
+                    incremental_children_dataset.intersection(current_local_dataset).print()
+                    print("Remote available snapshots:")
+                    fully_available_dataset.print()
+                    print("Local available snapshots:")
+                    current_local_dataset.print()
+                    return
+
                 # verify that no intermediate snapshot is missing
                 if any(not snapshot.has_incremental_base()
                        for snapshot in incremental_children_dataset
