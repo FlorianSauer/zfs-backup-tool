@@ -47,6 +47,17 @@ class ZfsCommands(BaseShellCommand):
             exit_code = sub_process.returncode
         return exit_code == 0
 
+    def has_snapshot(self, dataset: str, snapshot: str) -> bool:
+        command = "zfs list -H -o name -t snapshot"
+        command += ' | grep -q -e "{}@{}"'.format(dataset, snapshot)
+        try:
+            sub_process = self._execute(command, capture_output=True)
+        except CommandExecutionError as e:
+            exit_code = e.sub_process.returncode
+        else:
+            exit_code = sub_process.returncode
+        return exit_code == 0
+
     def get_dataset_size(self, dataset: str, recursive: bool) -> int:
         command = 'zfs list -p -H -o refer'
         if recursive:
@@ -78,8 +89,8 @@ class ZfsCommands(BaseShellCommand):
         command = 'zfs snapshot "{}@{}"'.format(source_dataset, next_snapshot)
         return self._execute(command, capture_output=False)
 
-    def delete_snapshot(self, dataset_zfs_path: str):
-        command = 'zfs destroy "{}"'.format(dataset_zfs_path)
+    def delete_snapshot(self, snapshot_zfs_path: str):
+        command = 'zfs destroy "{}"'.format(snapshot_zfs_path)
         return self._execute(command, capture_output=False)
 
     def zfs_send_snapshot_to_target(self, source_dataset: str,

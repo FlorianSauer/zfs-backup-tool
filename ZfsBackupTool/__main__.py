@@ -508,12 +508,12 @@ class ZfsBackupTool(object):
         if self.cli_args.restore == '.':
             # inplace restore
             self.backup_plan.restore_snapshots(repair_snapshot_restore_source_mapping,
-                                               inplace=True)
+                                               inplace=True, force_receive=self.cli_args.force)
         else:
             # restore to given path
             self.backup_plan.restore_snapshots(repair_snapshot_restore_source_mapping,
                                                restore_target=self.cli_args.restore,
-                                               inplace=False)
+                                               inplace=False, force_receive=self.cli_args.force)
 
     def do_verify(self):
         # scan local zfs setup
