@@ -1,18 +1,16 @@
-import os
 import shlex
 import sys
 import threading
-from pathlib import Path
 from subprocess import Popen
-from typing import List, Tuple, Dict, Set, cast, IO, TypeVar
+from typing import List, Tuple, Dict, cast, IO, TypeVar
 
 from .Base import BaseShellCommand, CommandExecutionError, PipePrinterThread
 from ..Constants import CALCULATED_CHECKSUM_FILE_POSTFIX
 
+_I = TypeVar('_I', bound=str)
+
 
 class FsCommands(BaseShellCommand):
-    I = TypeVar('I')
-
 
     def __init__(self, echo_cmd=False):
         super().__init__(echo_cmd)
@@ -57,7 +55,9 @@ class FsCommands(BaseShellCommand):
         else:
             command = 'test -d "{}" && echo exist || echo not'.format(path)
         # test is more verbose, to catch ssh errors or other unexpected shell errors
-        result = self._execute(command, capture_output=True).stdout.read().decode('utf-8').strip()
+        sub_process = self._execute(command, capture_output=True)
+        assert sub_process.stdout
+        result = sub_process.stdout.read().decode('utf-8').strip()
         if result == 'exist':
             return True
         elif result == 'not':
@@ -72,7 +72,9 @@ class FsCommands(BaseShellCommand):
         else:
             command = 'test -f "{}" && echo exist || echo not'.format(path)
         # test is more verbose, to catch ssh errors or other unexpected shell errors
-        result = self._execute(command, capture_output=True).stdout.read().decode('utf-8').strip()
+        sub_process = self._execute(command, capture_output=True)
+        assert sub_process.stdout
+        result = sub_process.stdout.read().decode('utf-8').strip()
         if result == 'exist':
             return True
         elif result == 'not':
@@ -159,14 +161,14 @@ class FsCommands(BaseShellCommand):
 
         return sub_process, command
 
-    def target_get_checksums(self, file_paths: Dict[I, str]) -> Dict[I, str]:
-        output_dict: Dict[str, str] = {}
+    def target_get_checksums(self, file_paths: Dict[_I, str]) -> Dict[_I, str]:
+        output_dict: Dict[_I, str] = {}
         print_lock = threading.Lock()
 
         sys.stdout.flush()
         sys.stderr.flush()
 
-        target_process_printer_mapping: Dict[str, Tuple[Popen, PipePrinterThread]] = {}
+        target_process_printer_mapping: Dict[_I, Tuple[Popen, PipePrinterThread]] = {}
 
         for file_index, pv_name in enumerate(sorted(file_paths.keys())):
             pv_process, command = self._target_get_checksum(file_paths[pv_name], pv_name)
@@ -182,6 +184,7 @@ class FsCommands(BaseShellCommand):
 
         # start printer threads
         for _, stderr_printer in target_process_printer_mapping.values():
+            stderr_printer.run()
             stderr_printer.start()
 
         try:
@@ -200,7 +203,13 @@ class FsCommands(BaseShellCommand):
                 pv_process.wait()
             raise
         finally:
-            sys.stderr.write('\n\r')
+            has_printed_anything = False
+            for _, stderr_printer in target_process_printer_mapping.values():
+                if stderr_printer.has_printed_anything:
+                    has_printed_anything = True
+                    break
+            if has_printed_anything:
+                sys.stderr.write('\n\r')
             sys.stdout.flush()
             sys.stderr.flush()
 

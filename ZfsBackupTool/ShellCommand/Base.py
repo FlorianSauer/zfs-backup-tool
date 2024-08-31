@@ -23,6 +23,7 @@ class PipePrinterThread(threading.Thread):
         self.write_lock = write_lock
         self.separator = separator
         self._aborted = False
+        self.has_printed_anything = False
 
     def abort(self):
         self._aborted = True
@@ -42,6 +43,8 @@ class PipePrinterThread(threading.Thread):
                             bytes(reversed(
                                 buffer)
                             ).replace(b'\n', b'', 1))))
+                    if buffer and buffer[-1] != b'\n'[0]:
+                        self.has_printed_anything = True
                     if self.row_index:
                         self.output.write('\033[{}B'.format(self.row_index).encode('utf-8'))
                     self.output.flush()
@@ -56,8 +59,9 @@ class PipePrinterThread(threading.Thread):
                     with self.write_lock:
                         if self.row_index:
                             self.output.write('\033[{}A'.format(self.row_index).encode('utf-8'))
-                        self.output.write(part)
                         self.output.write(self.separator)
+                        self.output.write(part)
+                        self.has_printed_anything = True
                         if self.row_index:
                             self.output.write('\033[{}B'.format(self.row_index).encode('utf-8'))
                         self.output.flush()

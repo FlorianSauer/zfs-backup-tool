@@ -62,6 +62,7 @@ class BackupPlan(object):
 
             for target_paths, pools in pool_target_paths.items():
                 for snapshot in pools.iter_snapshots():
+                    print("Verifying snapshot: ", snapshot.zfs_path)
                     if not self._verify_snapshot_on_target(snapshot, host, list(target_paths),
                                                            remove_invalid=remove_invalid,
                                                            force_recalculate=True):
