@@ -1,7 +1,8 @@
 BACKUP_FILE_POSTFIX = ".zfs"
-CHECKSUM_FILE_POSTFIX = ".sha256"
-EXPECTED_CHECKSUM_FILE_POSTFIX = ".expected_sha256"
+EXPECTED_CHECKSUM_FILE_POSTFIX = ".sha256"
+"""must be used in conjunction with the backup file postfix"""
 CALCULATED_CHECKSUM_FILE_POSTFIX = ".calculated_sha256"
+"""must be used in conjunction with the backup file postfix"""
 INITIALIZED_FILE_NAME = ".initialized"
 INITIAL_SNAPSHOT_POSTFIX = "initial"
 SNAPSHOT_PREFIX_POSTFIX_SEPARATOR = "."
@@ -9,7 +10,6 @@ TARGET_STORAGE_SUBDIRECTORY = "zfs"
 
 __all__ = [
     "BACKUP_FILE_POSTFIX",
-    "CHECKSUM_FILE_POSTFIX",
     "EXPECTED_CHECKSUM_FILE_POSTFIX",
     "CALCULATED_CHECKSUM_FILE_POSTFIX",
     "INITIALIZED_FILE_NAME",

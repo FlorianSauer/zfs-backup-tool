@@ -78,8 +78,8 @@ class ZfsCommands(BaseShellCommand):
         command = 'zfs snapshot "{}@{}"'.format(source_dataset, next_snapshot)
         return self._execute(command, capture_output=False)
 
-    def delete_snapshot(self, source_dataset: str, snapshot: str):
-        command = 'zfs destroy "{}@{}"'.format(source_dataset, snapshot)
+    def delete_snapshot(self, dataset_zfs_path: str):
+        command = 'zfs destroy "{}"'.format(dataset_zfs_path)
         return self._execute(command, capture_output=False)
 
     def zfs_send_snapshot_to_target(self, source_dataset: str,
@@ -123,50 +123,58 @@ class ZfsCommands(BaseShellCommand):
             sys.stderr.flush()
             return tmp.read().decode('utf-8').strip().split(' ')[0]
 
-    def zfs_recv_snapshot_from_target_old(self, target_path: str, source_dataset: str, snapshot: str, target: str) -> None:
-
-        # create datasets under root path, without the last part of the dataset path.
-        # the last part is created by zfs recv.
-        # otherwise, when an encrypted dataset is received, the unencrypted dataset would be overwritten by an
-        # encrypted dataset, which is forbidden by zfs.
-        re_joined_parts = target_path
-        for dataset in Path(source_dataset).parts[:-1]:
-            re_joined_parts = os.path.join(re_joined_parts, dataset)
-            if not self.has_dataset(re_joined_parts):
-                self._execute('zfs create "{}"'.format(re_joined_parts), capture_output=False)
-
-        backup_path = os.path.join(target, TARGET_STORAGE_SUBDIRECTORY, source_dataset, snapshot + BACKUP_FILE_POSTFIX)
-        if self.remote:
-            command = self._get_ssh_command(self.remote)
-            command += shlex.quote(
-                'pv {} "{}"'.format(self._PV_DEFAULT_OPTIONS, backup_path))
-        else:
-            command = 'pv {} "{}"'.format(self._PV_DEFAULT_OPTIONS, backup_path)
-        command += ' | zfs recv -F "{}"'.format(os.path.join(target_path, source_dataset))
-
-        self._execute(command, capture_output=False)
-
-    def zfs_recv_snapshot_from_target(self, restore_source_dirpath: str, restore_zfs_path: str,
+    def zfs_recv_snapshot_from_target(self, restore_source_dirpath: str,
+                                      restore_source_zfs_path: str,
                                       restore_target_zfs_path: str) -> None:
-        # create datasets under restore_target, without the last part of the restore_zfs_path path.
-        # the last part is created by zfs recv.
+        # we iter the second to second last part of the restore_zfs_path to create the datasets, excluding
+        # the pool and the target dataset are skipped
+        # pool creation is a too big hassle, maybe do this at a later point
+        # target dataset MUST be excluded and only created by zfs recv
+        # restore_target_zfs_path must therefore be a full dataset zfs path (not a snapshot)
+        # contianing one slash (pool to dataset separator) and no @ (dataset to snapshot separator)
+        # the last restore_target_zfs_path part is created by zfs recv.
         # otherwise, when an encrypted dataset is received, the unencrypted dataset would be overwritten by an
         # encrypted dataset, which is forbidden by zfs
-        restore_dataset_zfs_path, restore_snapshot = restore_zfs_path.split('@', 1)
-        re_joined_zfs_path_parts = restore_target_zfs_path
-        for dataset in Path(restore_dataset_zfs_path).parts[:-1]:
-            re_joined_zfs_path_parts = os.path.join(re_joined_zfs_path_parts, dataset)
+        if '/' not in restore_target_zfs_path:
+            raise ValueError("restore_target_zfs_path must contain a pool and a dataset")
+        if '@' in restore_target_zfs_path:
+            raise ValueError("restore_target_zfs_path must not contain a snapshot")
+        # restore_zfs_path must be a full snapshot zfs path (at least one / and one @)
+        # it's used for the source directory concatenation with restore_source_dirpath, which is the directory
+        # containing the backup files (all under TARGET_STORAGE_SUBDIRECTORY)
+        if '/' not in restore_source_zfs_path:
+            raise ValueError("restore_source_zfs_path must contain a pool and a dataset")
+        if '@' not in restore_source_zfs_path:
+            raise ValueError("restore_source_zfs_path must contain a snapshot")
+
+        # region recreate the parent datasets of the restore_target_zfs_path
+        restore_target_poolname = Path(restore_target_zfs_path).parts[0]
+        # exclude pool and target dataset
+        restore_target_needed_dataset_parts = Path(restore_target_zfs_path).parts[1:-1]
+
+        re_joined_zfs_path_parts = restore_target_poolname
+        for restore_dataset_part in restore_target_needed_dataset_parts:
+            re_joined_zfs_path_parts = os.path.join(re_joined_zfs_path_parts, restore_dataset_part)
             if not self.has_dataset(re_joined_zfs_path_parts):
                 self._execute('zfs create "{}"'.format(re_joined_zfs_path_parts), capture_output=False)
 
-        restore_file_path = os.path.join(restore_source_dirpath, TARGET_STORAGE_SUBDIRECTORY, restore_dataset_zfs_path,
+        # except of the pool and the last dataset segment, all datasets are created.
+        # the last dataset segment is created by zfs recv
+        # endregion
+
+        # region read the backup file and forward it to zfs recv
+        restore_pool_dataset_zfs_path, restore_snapshot = restore_source_zfs_path.split('@', 1)
+        restore_file_path = os.path.join(restore_source_dirpath, TARGET_STORAGE_SUBDIRECTORY,
+                                         restore_pool_dataset_zfs_path,
                                          restore_snapshot + BACKUP_FILE_POSTFIX)
+
         if self.remote:
             command = self._get_ssh_command(self.remote)
             command += shlex.quote(
                 'pv {} "{}"'.format(self._PV_DEFAULT_OPTIONS, restore_file_path))
         else:
             command = 'pv {} "{}"'.format(self._PV_DEFAULT_OPTIONS, restore_file_path)
-        command += ' | zfs recv -F "{}"'.format(os.path.join(restore_target_zfs_path, restore_dataset_zfs_path))
+        command += ' | zfs recv -F "{}"'.format(restore_target_zfs_path)
 
         self._execute(command, capture_output=False)
+        # endregion

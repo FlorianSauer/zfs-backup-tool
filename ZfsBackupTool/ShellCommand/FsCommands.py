@@ -2,11 +2,12 @@ import os
 import shlex
 import sys
 import threading
+from pathlib import Path
 from subprocess import Popen
 from typing import List, Tuple, Dict, Set, cast, IO
 
 from .Base import BaseShellCommand, CommandExecutionError, PipePrinterThread
-from ..Constants import TARGET_STORAGE_SUBDIRECTORY, BACKUP_FILE_POSTFIX, CALCULATED_CHECKSUM_FILE_POSTFIX
+from ..Constants import CALCULATED_CHECKSUM_FILE_POSTFIX
 
 
 class FsCommands(BaseShellCommand):
@@ -30,6 +31,14 @@ class FsCommands(BaseShellCommand):
             command = 'rm -f "{}"'.format(path)
         return self._execute(command, capture_output=False)
 
+    def target_remove_files(self, paths: List[str]):
+        if self.remote:
+            command = self._get_ssh_command(self.remote)
+            command += shlex.quote('rm -f {}'.format(' '.join('"{}"'.format(path) for path in paths)))
+        else:
+            command = 'rm -f {}'.format(' '.join('"{}"'.format(path) for path in paths))
+        return self._execute(command, capture_output=False)
+
     def target_write_to_file(self, path: str, content: str):
         command = "echo '{}' | ".format(content)
         if self.remote:
@@ -42,30 +51,32 @@ class FsCommands(BaseShellCommand):
     def target_dir_exists(self, path: str):
         if self.remote:
             command = self._get_ssh_command(self.remote)
-            command += shlex.quote('test -d "{}"'.format(path))
+            command += shlex.quote('test -d "{}" && echo exist || echo not'.format(path))
         else:
-            command = 'test -d "{}"'.format(path)
-        try:
-            sub_process = self._execute(command, capture_output=True)
-        except CommandExecutionError as e:
-            exit_code = e.sub_process.returncode
+            command = 'test -d "{}" && echo exist || echo not'.format(path)
+        # test is more verbose, to catch ssh errors or other unexpected shell errors
+        result = self._execute(command, capture_output=True).stdout.read().decode('utf-8').strip()
+        if result == 'exist':
+            return True
+        elif result == 'not':
+            return False
         else:
-            exit_code = sub_process.returncode
-        return exit_code == 0
+            raise NotImplementedError("Unexpected result: {}".format(result))
 
     def target_file_exists(self, path: str):
         if self.remote:
             command = self._get_ssh_command(self.remote)
-            command += shlex.quote('test -f "{}"'.format(path))
+            command += shlex.quote('test -f "{}" && echo exist || echo not'.format(path))
         else:
-            command = 'test -f "{}"'.format(path)
-        try:
-            sub_process = self._execute(command, capture_output=True)
-        except CommandExecutionError as e:
-            exit_code = e.sub_process.returncode
+            command = 'test -f "{}" && echo exist || echo not'.format(path)
+        # test is more verbose, to catch ssh errors or other unexpected shell errors
+        result = self._execute(command, capture_output=True).stdout.read().decode('utf-8').strip()
+        if result == 'exist':
+            return True
+        elif result == 'not':
+            return False
         else:
-            exit_code = sub_process.returncode
-        return exit_code == 0
+            raise NotImplementedError("Unexpected result: {}".format(result))
 
     def target_list_directory(self, path: str) -> Tuple[List[str], List[str]]:
         """
@@ -120,36 +131,33 @@ class FsCommands(BaseShellCommand):
             print(stderr_data, file=sys.stderr)
             sys.exit(1)
         else:
+            print("Program '{}' is installed".format(program))
             return True
 
-    def _target_get_checksum(self, source_dataset: str, next_snapshot: str, target_path: str) -> Tuple[Popen, str]:
+    def _target_get_checksum(self, file_path: str, pv_name: str) -> Tuple[Popen, str]:
         if self.remote:
             command = self._get_ssh_command(self.remote)
             checksum_command = 'pv {} --name "{}" --cursor "{}"'.format(
                 self._PV_DEFAULT_OPTIONS,
-                target_path,
-                os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
-                             next_snapshot + BACKUP_FILE_POSTFIX))
+                pv_name,
+                file_path)
             checksum_command += ' | sha256sum -b > "{}"'.format(
-                os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
-                             next_snapshot + BACKUP_FILE_POSTFIX + CALCULATED_CHECKSUM_FILE_POSTFIX))
+                file_path + CALCULATED_CHECKSUM_FILE_POSTFIX)
             command += shlex.quote(checksum_command)
         else:
             command = 'pv {} --name "{}" --cursor "{}"'.format(
                 self._PV_DEFAULT_OPTIONS,
-                target_path,
-                os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
-                             next_snapshot + BACKUP_FILE_POSTFIX))
+                pv_name,
+                file_path)
             command += ' | sha256sum -b > "{}"'.format(
-                os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
-                             next_snapshot + BACKUP_FILE_POSTFIX + CALCULATED_CHECKSUM_FILE_POSTFIX))
+                file_path + CALCULATED_CHECKSUM_FILE_POSTFIX)
 
         sub_process = self._execute(command, capture_output=True, capture_stdout=False, capture_stderr=True,
                                     no_wait=True)
 
         return sub_process, command
 
-    def target_get_checksums(self, source_dataset: str, next_snapshot: str, target_paths: Set[str]):
+    def target_get_checksums(self, file_paths: Set[str]):
         output_dict: Dict[str, str] = {}
         print_lock = threading.Lock()
 
@@ -158,14 +166,20 @@ class FsCommands(BaseShellCommand):
 
         target_process_printer_mapping: Dict[str, Tuple[Popen, PipePrinterThread]] = {}
 
-        for target_index, target_path in enumerate(sorted(target_paths)):
-            pv_process, command = self._target_get_checksum(source_dataset, next_snapshot, target_path)
-            stderr_printer = PipePrinterThread(cast(IO[bytes], pv_process.stderr), sys.stderr.buffer, target_index,
+        # find common path prefix
+        common_prefix = str(os.path.commonpath(*file_paths))
+
+        for file_index, file_path in enumerate(sorted(file_paths)):
+            # build pv_name, by using the common prefix as base and ONE filepath part of the file path
+            pv_name = os.path.join(common_prefix,
+                                   Path(file_path.replace(common_prefix, '', 1)).parts[0])
+            pv_process, command = self._target_get_checksum(file_path, pv_name)
+            stderr_printer = PipePrinterThread(cast(IO[bytes], pv_process.stderr), sys.stderr.buffer, file_index,
                                                print_lock)
-            if target_index > 0:
+            if file_index > 0:
                 sys.stderr.write('\n\r')
 
-            target_process_printer_mapping[target_path] = (pv_process, stderr_printer)
+            target_process_printer_mapping[file_path] = (pv_process, stderr_printer)
 
         sys.stdout.flush()
         sys.stderr.flush()
@@ -194,14 +208,13 @@ class FsCommands(BaseShellCommand):
             sys.stdout.flush()
             sys.stderr.flush()
 
-        for target_path, (pv_process, stderr_printer) in target_process_printer_mapping.items():
+        for file_path, (pv_process, stderr_printer) in target_process_printer_mapping.items():
             stderr_printer.join()
             if pv_process.returncode != 0:
                 raise CommandExecutionError(pv_process, "Error executing command > {} <".format(str(pv_process.args)))
 
-            checksum_file = os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, source_dataset,
-                                         next_snapshot + BACKUP_FILE_POSTFIX + CALCULATED_CHECKSUM_FILE_POSTFIX)
+            checksum_file = file_path + CALCULATED_CHECKSUM_FILE_POSTFIX
             checksum = self.target_read_checksum_from_file(checksum_file)
-            output_dict[target_path] = checksum
+            output_dict[file_path] = checksum
 
         return output_dict

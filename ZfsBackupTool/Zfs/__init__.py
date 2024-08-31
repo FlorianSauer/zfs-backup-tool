@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import List, Dict, Iterable, Union, Iterator
 
@@ -5,42 +6,15 @@ from ZfsBackupTool.ShellCommand import ShellCommand
 from .Pool import Pool
 from .Pool.Dataset import DataSet
 from .Pool.Dataset.Snapshot import Snapshot
+from .errors import ZfsResolveError
 
-__all__ = ['build_incremental_snapshot_refs',
-           'scan_zfs_pools', 'scan_filebased_zfs_pools',
-           'merge_pools', 'difference_pools', 'intersection_pools',
-           'PoolList', 'Pool', 'DataSet', 'Snapshot']
+__all__ = [
+    'scan_zfs_pools', 'scan_filebased_zfs_pools',
+    'PoolList', 'Pool', 'DataSet', 'Snapshot']
 
-from ..Constants import (BACKUP_FILE_POSTFIX, CHECKSUM_FILE_POSTFIX, SNAPSHOT_PREFIX_POSTFIX_SEPARATOR,
-                         INITIAL_SNAPSHOT_POSTFIX)
+from ..Constants import (BACKUP_FILE_POSTFIX, EXPECTED_CHECKSUM_FILE_POSTFIX, CALCULATED_CHECKSUM_FILE_POSTFIX)
 
-
-def merge_pools(*pools: Union[Pool, Iterable[Pool]]) -> List[Pool]:
-    """
-    Combine pools with the same name into a single pool.
-    """
-    equal_pools: Dict[str, List[Pool]] = {}
-    for pool in pools:
-        if isinstance(pool, Pool):
-            if pool.pool_name in equal_pools:
-                equal_pools[pool.pool_name].append(pool)
-            else:
-                equal_pools[pool.pool_name] = [pool]
-        elif isinstance(pool, Iterable):
-            for sub_pool in pool:
-                if sub_pool.pool_name in equal_pools:
-                    equal_pools[sub_pool.pool_name].append(sub_pool)
-                else:
-                    equal_pools[sub_pool.pool_name] = [sub_pool]
-        else:
-            raise ValueError("Invalid pool type {}".format(type(pool)))
-
-    merged_pools = []
-    for pool_name, pool_list in equal_pools.items():
-        merged_pool = Pool.merge(*pool_list)
-        merged_pools.append(merged_pool)
-
-    return merged_pools
+logger = logging.getLogger(__name__)
 
 
 class PoolList(object):
@@ -123,10 +97,15 @@ class PoolList(object):
                     yield snapshot
 
     def resolve_zfs_path(self, zfs_path: str) -> Union[Pool, DataSet, Snapshot]:
+        """
+        Resolve a ZFS path to a Pool, DataSet or Snapshot object.
+
+        :raises ZfsResolveError: If the pool name is not found in the pool list.
+        """
         pool_name, _ = zfs_path.split("/", 1)
         if pool_name in self.pools:
             return self.pools[pool_name].resolve_zfs_path(zfs_path)
-        raise ValueError("Pool '{}' not found in the pool list".format(pool_name))
+        raise ZfsResolveError("Pool '{}' not found in the pool list".format(pool_name))
 
     def print(self):
         for pool in self:
@@ -218,13 +197,23 @@ class PoolList(object):
 
         return PoolList(intersection_pools)
 
+    def has_incremental_snapshot_refs(self) -> bool:
+        return any(pool.has_incremental_snapshot_refs() for pool in self.pools.values())
+
     def has_snapshots(self):
         return any(pool.has_snapshots() for pool in self.pools.values())
 
+    def has_datasets(self):
+        return any(pool.has_datasets() for pool in self.pools.values())
+
     def get_dataset_by_path(self, zfs_path: str):
         pool_name, dataset_name = zfs_path.split("/", 1)
-        dataset_name = dataset_name.split("@", 1)[0]
-        return self.pools[pool_name].datasets["{}/{}".format(pool_name, dataset_name)]
+        dataset_name = "{}/{}".format(pool_name, dataset_name.split("@", 1)[0])
+        if pool_name not in self.pools:
+            raise ZfsResolveError("Pool '{}' not found in the pool list".format(pool_name))
+        if dataset_name not in self.pools[pool_name].datasets:
+            raise ZfsResolveError("Dataset '{}' not found in the pool '{}'".format(dataset_name, pool_name))
+        return self.pools[pool_name].datasets[dataset_name]
 
     def build_incremental_snapshot_refs(self) -> None:
         """
@@ -233,58 +222,55 @@ class PoolList(object):
         for pool in self.pools.values():
             pool.build_incremental_snapshot_refs()
 
-def build_incremental_snapshot_refs(pool_list: PoolList) -> None:
-    """
-    Build incremental snapshot references for all snapshots in the pool list.
-    """
-    for pool in pool_list:
-        for dataset in pool:
-            sorted_snapshots = DataSet.sort_snapshots(dataset.snapshots.values())
-            snapshot_prefixes = set()
-            for snapshot in sorted_snapshots:
-                snapshot_prefix = snapshot.snapshot_name.rsplit(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR, 1)[0]
-                snapshot_prefixes.add(snapshot_prefix)
+    def drop_snapshots(self) -> None:
+        """
+        Drop all snapshots from all datasets in this PoolList.
+        """
+        for pool in self.pools.values():
+            pool.drop_snapshots()
 
-            for snapshot_prefix in snapshot_prefixes:
-                incremental_base = None
-                for index, snapshot in enumerate(sorted_snapshots):
-                    if snapshot.snapshot_name.startswith(snapshot_prefix + SNAPSHOT_PREFIX_POSTFIX_SEPARATOR):
-                        if incremental_base:
-                            # verify incremental base +1 is equal to our current snapshot index
-                            if incremental_base.snapshot_name.endswith(
-                                    SNAPSHOT_PREFIX_POSTFIX_SEPARATOR + INITIAL_SNAPSHOT_POSTFIX):
-                                incremental_base_index = 0
-                            else:
-                                incremental_base_index = int(
-                                    incremental_base.snapshot_name.split(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR)[-1])
-                            snapshot_index = int(
-                                snapshot.snapshot_name.split(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR)[-1])
-                            if incremental_base_index + 1 != snapshot_index:
-                                continue
+    def drop_empty_datasets(self) -> None:
+        """
+        Drop all datasets that have no snapshots from all pools in this PoolList.
+        """
+        for pool in self.pools.values():
+            pool.drop_empty_datasets()
 
-                            snapshot.set_incremental_base(incremental_base)
-                        incremental_base = snapshot
+    def filter_include_by_zfs_path_prefix(self, zfs_path_prefix: str) -> "PoolList":
+        """
+        Filter out all elements in the pool, which do not match the given zfs path prefix.
+        """
+        new_poollist = PoolList()
+
+        for pool in self.pools.values():
+            pool_view = pool.filter_include_by_zfs_path_prefix(zfs_path_prefix)
+            if pool_view.has_datasets():
+                new_poollist.add_pool(pool_view)
+
+        return new_poollist
 
 
-def scan_zfs_pools(shell_command: ShellCommand) -> PoolList:
+def scan_zfs_pools(shell_command: ShellCommand, include_dataset_sizes=False) -> PoolList:
     """
     Scan the local system for ZFS datasets.
     """
     # first scan for pools
     pool_names = shell_command.list_pools()
-    print("Found pools: ", pool_names)
+    logger.debug("Found pools: {}".format(pool_names))
     pools = [Pool(pool_name) for pool_name in pool_names]
 
     # iter pools, add datasets, add snapshots
     for pool in pools:
         pool_dataset_names = shell_command.list_datasets(pool.pool_name)
-        print("Found datasets for pool {}: ".format(pool.pool_name), pool_dataset_names)
+        logger.debug("Found datasets for pool {}: {}".format(pool.pool_name, pool_dataset_names))
         for dataset_name in pool_dataset_names:
             dataset = DataSet(pool.pool_name, dataset_name)
+            if include_dataset_sizes:
+                dataset.dataset_size = shell_command.get_dataset_size(dataset.zfs_path, recursive=False)
             pool.add_dataset(dataset)
 
             dataset_snapshot_names = shell_command.list_snapshots(dataset.zfs_path)
-            print("Found snapshots for dataset {}: ".format(dataset.zfs_path), dataset_snapshot_names)
+            logger.debug("Found snapshots for dataset {}: {}".format(dataset.zfs_path, dataset_snapshot_names))
 
             for snapshot_name in dataset_snapshot_names:
                 snapshot = Snapshot(pool.pool_name, dataset.dataset_name, snapshot_name)
@@ -300,7 +286,7 @@ def scan_filebased_zfs_pools(shell_command: ShellCommand, target_pool_storage_pa
         return PoolList(discovered_pools)
 
     _, pool_names = shell_command.target_list_directory(target_pool_storage_path)
-    print("Found pools: ", pool_names)
+    logger.debug("Found pools: {}".format(pool_names))
     for pool_name in pool_names:
         pool = Pool(pool_name)
         discovered_pools.add_pool(pool)
@@ -309,7 +295,7 @@ def scan_filebased_zfs_pools(shell_command: ShellCommand, target_pool_storage_pa
         pool_target_path = os.path.join(target_pool_storage_path, pool.pool_name)
         # prime dataset_dirs with the dataset names
         files, dataset_names = shell_command.target_list_directory(pool_target_path)
-        print("Found top level datasets for pool {}: ".format(pool.pool_name), dataset_names)
+        logger.debug("Found top level datasets for pool {}: {}".format(pool.pool_name, dataset_names))
 
         # analyze datasets while we have some
         while dataset_names:
@@ -319,8 +305,8 @@ def scan_filebased_zfs_pools(shell_command: ShellCommand, target_pool_storage_pa
 
             dataset_dir_file_names, dataset_dir_subdir_names = shell_command.target_list_directory(
                 dataset_target_path)
-            print("Found files for dataset {}: ".format(dataset_zfs_path), dataset_dir_file_names)
-            print("Found folders for dataset {}: ".format(dataset_zfs_path), dataset_dir_subdir_names)
+            logger.debug("Found files for dataset {}: {}".format(dataset_zfs_path, dataset_dir_file_names))
+            logger.debug("Found folders for dataset {}: {}".format(dataset_zfs_path, dataset_dir_subdir_names))
 
             # filter out checksum files
             snapshot_files = [snapshot_name
@@ -333,15 +319,20 @@ def scan_filebased_zfs_pools(shell_command: ShellCommand, target_pool_storage_pa
                     dataset = pool.datasets[dataset_zfs_path]
                 else:
                     dataset = DataSet(pool.pool_name, dataset_name)
-                    print("Adding dataset: ", dataset_name)
+                    logger.debug("Adding dataset: {}".format(dataset_name))
                     pool.add_dataset(dataset)
                 for snapshot_file in snapshot_files:
                     snapshot_name = snapshot_file.replace(BACKUP_FILE_POSTFIX, "")
-                    snapshot_checksum_file = snapshot_file + CHECKSUM_FILE_POSTFIX
+                    snapshot_checksum_file = snapshot_file + EXPECTED_CHECKSUM_FILE_POSTFIX
                     if snapshot_checksum_file not in dataset_dir_file_names:
                         # skip snapshots without checksum file, verification is not possible without it
                         continue
-                    print("found snapshot: ", snapshot_name)
+                    snapshot_calculated_checksum_file = snapshot_file + CALCULATED_CHECKSUM_FILE_POSTFIX
+                    if snapshot_calculated_checksum_file not in dataset_dir_file_names:
+                        # skip snapshots without a calculated checksum file, verification is still pending for this
+                        # snapshot/file
+                        continue
+                    logger.debug("found snapshot: {}".format(snapshot_name))
                     if snapshot_name in dataset.snapshots:
                         continue
                     snapshot = Snapshot(pool.pool_name, dataset.dataset_name, snapshot_name)

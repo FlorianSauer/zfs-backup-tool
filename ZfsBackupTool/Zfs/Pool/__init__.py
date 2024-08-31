@@ -2,6 +2,7 @@ from typing import Dict, List, Iterator, Iterable, Union
 
 from .Dataset import DataSet
 from .Dataset.Snapshot import Snapshot
+from ..errors import ZfsResolveError
 
 
 class Pool(object):
@@ -58,7 +59,7 @@ class Pool(object):
             raise ValueError("Dataset '{}' already added to the pool '{}'".format(dataset.zfs_path, self.pool_name))
         if dataset.pool_name != self.pool_name:
             raise ValueError("Dataset '{}' must have the same pool name as the pool '{}'".format(dataset.zfs_path,
-                                                                                                   self.pool_name))
+                                                                                                 self.pool_name))
         self.datasets[dataset.zfs_path] = dataset
 
     def remove_dataset(self, dataset: DataSet):
@@ -76,10 +77,22 @@ class Pool(object):
                 yield snapshot
 
     def resolve_zfs_path(self, zfs_path: str) -> Union[DataSet, Snapshot]:
-        if zfs_path.startswith(self.zfs_path):
-            dataset_path, snapshot_name = zfs_path.split("@", 1)
-            return self.datasets[dataset_path].resolve_zfs_path(zfs_path)
-        raise ValueError("Dataset '{}' not found in the pool '{}'".format(zfs_path, self.zfs_path))
+        """
+        Resolve a ZFS path to a dataset or snapshot object.
+
+        :raises ZfsResolveError: If the ZFS path is not found in the pool.
+        """
+        if '@' in zfs_path:
+            # resolve snapshot
+            dataset_path, _ = zfs_path.split("@", 1)
+            if dataset_path in self.datasets:
+                return self.datasets[dataset_path].resolve_zfs_path(zfs_path)
+        else:
+            # resolve dataset
+            dataset_path = zfs_path
+            if dataset_path in self.datasets:
+                return self.datasets[dataset_path]
+        raise ZfsResolveError("Dataset '{}' not found in the pool '{}'".format(zfs_path, self.zfs_path))
 
     def get_dataset_by_name(self, dataset_name: str) -> DataSet:
         return self.datasets[self.resolve_dataset_name(dataset_name)]
@@ -158,17 +171,20 @@ class Pool(object):
             intersecting_datasets = set(intersection_base_pool.datasets.keys()).intersection(pool.datasets.keys())
             for intersecting_dataset in intersecting_datasets:
                 intersection_pool.add_dataset(
-                        intersection_base_pool.datasets[intersecting_dataset].intersection(
-                            pool.datasets[intersecting_dataset]
-                        ))
+                    intersection_base_pool.datasets[intersecting_dataset].intersection(
+                        pool.datasets[intersecting_dataset]
+                    ))
             intersection_base_pool = intersection_pool.view()
         return intersection_pool
 
-    def is_incremental(self) -> bool:
-        return any(dataset.is_incremental() for dataset in self.datasets.values())
+    def has_incremental_snapshot_refs(self) -> bool:
+        return any(dataset.has_incremental_snapshot_refs() for dataset in self.datasets.values())
 
     def has_snapshots(self):
         return any(dataset.has_snapshots() for dataset in self.datasets.values())
+
+    def has_datasets(self):
+        return len(self.datasets) > 0
 
     def build_incremental_snapshot_refs(self) -> None:
         """
@@ -176,3 +192,29 @@ class Pool(object):
         """
         for dataset in self.datasets.values():
             dataset.build_incremental_snapshot_refs()
+
+    def drop_snapshots(self):
+        for dataset in self.datasets.values():
+            dataset.drop_snapshots()
+
+    def drop_empty_datasets(self):
+        """
+        Drop all datasets which have no snapshots.
+        """
+        for dataset in list(self.datasets.values()):
+            if not dataset.has_snapshots():
+                self.remove_dataset(dataset)
+
+    def filter_include_by_zfs_path_prefix(self, zfs_path_prefix: str) -> "Pool":
+        """
+        Filter out all elements in the pool, which do not match the given zfs path prefix.
+        """
+        new_pool = self.copy()
+
+        for dataset in self.datasets.values():
+            # add @ to the zfs path prefix to match the full potential dataset zfs path
+            if (dataset.zfs_path + "@").startswith(zfs_path_prefix):
+                dataset_view = dataset.filter_include_by_zfs_path_prefix(zfs_path_prefix)
+                new_pool.add_dataset(dataset_view)
+
+        return new_pool

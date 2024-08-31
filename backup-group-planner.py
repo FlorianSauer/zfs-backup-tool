@@ -1,9 +1,9 @@
 import argparse
 import sys
 
-from ZfsBackupTool.DataSet import DataSet
 from ZfsBackupTool.ResourcePacker import ResourcePacker, PackingError
 from ZfsBackupTool.ShellCommand import ShellCommand
+from ZfsBackupTool.Zfs import scan_zfs_pools, PoolList
 
 
 class BackupGroupPlanner(object):
@@ -62,14 +62,15 @@ class BackupGroupPlanner(object):
         if self.cli_args.debug:
             print(self.cli_args)
 
+        available_pools = scan_zfs_pools(self.shell_command, include_dataset_sizes=True)
         source_datasets = []
         for dataset in self.cli_args.source_datasets:
             if dataset.endswith("*"):
                 dataset = dataset[:-1]
                 dataset = dataset[:-1] if dataset.endswith("/") else dataset
-                source_datasets.extend(self.shell_command.get_datasets(dataset, recursive=True))
+                source_datasets.append(available_pools.filter_include_by_zfs_path_prefix(dataset))
             else:
-                source_datasets.extend(self.shell_command.get_datasets(dataset, recursive=False))
+                source_datasets.append(available_pools.filter_include_by_zfs_path_prefix(dataset + '@'))
 
         disk_priorities = [disk[0] for disk in self.cli_args.disk]
 
@@ -77,9 +78,7 @@ class BackupGroupPlanner(object):
 
         disk_free_percentage = self.cli_args.disk_free_percentage
 
-        datasets = []
-        for source_dataset in source_datasets:
-            datasets.append(DataSet(self.shell_command, source_dataset, set()))
+        datasets = PoolList.merge(*source_datasets)
 
         if self.cli_args.write_config:
             # write Target-Group section for each disk
@@ -99,11 +98,13 @@ class BackupGroupPlanner(object):
             usage_size = 0
             try:
                 packets = packer.getFragmentPackets(disk_size - int((disk_size * disk_free_percentage)),
-                                                    datasets,
+                                                    datasets.iter_datasets(),
                                                     allow_oversized=disk_is_not_smallest_and_last_disk)
             except PackingError as e:
                 if self.cli_args.debug:
-                    dataset_size_dict = {dataset.zfs_path: dataset.get_dataset_size() for dataset in datasets}
+                    dataset_size_dict = {dataset.zfs_path: self.shell_command.get_dataset_size(dataset.zfs_path,
+                                                                                               recursive=False)
+                                         for dataset in datasets}
                     print("Dataset sizes:")
                     print(repr(dataset_size_dict))
                     print("Packed packets:")
@@ -113,7 +114,9 @@ class BackupGroupPlanner(object):
                 print("Try to lower the disk_free_percentage or increase the disk size.")
                 sys.exit(1)
             if self.cli_args.debug:
-                dataset_size_dict = {dataset.zfs_path: dataset.get_dataset_size() for dataset in datasets}
+                dataset_size_dict = {dataset.zfs_path: self.shell_command.get_dataset_size(dataset.zfs_path,
+                                                                                           recursive=False)
+                                     for dataset in datasets}
                 print("Dataset sizes:")
                 print(repr(dataset_size_dict))
                 print("Packed packets:")
@@ -125,7 +128,7 @@ class BackupGroupPlanner(object):
                 for fragment, size in sorted(packets[0].items(), key=lambda x: x[0].zfs_path):
                     print("  {}: {}".format(fragment.zfs_path, size))
                     usage_size += size
-                    datasets.remove(fragment)
+                    datasets.pools[fragment.pool_name].remove_dataset(fragment)
 
                 if self.cli_args.write_config:
                     # append Source section
@@ -135,18 +138,18 @@ class BackupGroupPlanner(object):
                                       for dataset in sorted(packets[0].keys(), key=lambda x: x.zfs_path)])))
                         f.write("source = {}\n".format(
                             ", ".join([dataset.zfs_path
-                                      for dataset in sorted(packets[0].keys(), key=lambda x: x.zfs_path)])))
+                                       for dataset in sorted(packets[0].keys(), key=lambda x: x.zfs_path)])))
                         f.write("target = {}\n".format(label))
                         f.write("recursive = False\n")
                         f.write("\n")
 
-            remaining_dataset_size = sum([dataset.get_dataset_size() for dataset in datasets])
+            remaining_dataset_size = sum([dataset.dataset_size for dataset in datasets.iter_datasets()])
             if remaining_dataset_size + usage_size < disk_size:
-                for dataset in datasets:
-                    size = dataset.get_dataset_size()
+                for dataset in datasets.iter_datasets():
+                    size = dataset.dataset_size
                     print("  {}: {}".format(dataset.zfs_path, size))
                     usage_size += size
-                    datasets.remove(dataset)
+                    datasets.pools[dataset.pool_name].remove_dataset(dataset)
 
             print("Disk size: ", disk_size)
             print("Usage size:", usage_size)

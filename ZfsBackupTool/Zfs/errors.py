@@ -1,0 +1,2 @@
+class ZfsResolveError(Exception):
+    pass

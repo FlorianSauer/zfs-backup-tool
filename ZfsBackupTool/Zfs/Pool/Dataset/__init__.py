@@ -1,7 +1,8 @@
-from typing import Dict, Iterator, List, Iterable
+from typing import Dict, Iterator, List, Iterable, Optional
 
 from ZfsBackupTool.Constants import SNAPSHOT_PREFIX_POSTFIX_SEPARATOR, INITIAL_SNAPSHOT_POSTFIX
 from .Snapshot import Snapshot
+from ...errors import ZfsResolveError
 
 
 class DataSet(object):
@@ -10,6 +11,7 @@ class DataSet(object):
         self.dataset_name = dataset_name
         self.zfs_path = "{}/{}".format(pool_name, dataset_name)
         self.snapshots: Dict[str, Snapshot] = {}
+        self._dataset_size: Optional[int] = None
 
     def __str__(self):
         return "DataSet({})".format(self.zfs_path)
@@ -34,12 +36,25 @@ class DataSet(object):
         # finally check the dataset paths and other attributes
         return self.zfs_path == other.zfs_path
 
+    @property
+    def dataset_size(self) -> int:
+        if self._dataset_size is None:
+            raise ValueError("Dataset size not set")
+        return self._dataset_size
+
+    @dataset_size.setter
+    def dataset_size(self, value: int):
+        self._dataset_size = value
+
     def copy(self):
         """
         This method creates a new DataSet object with the same pool name and dataset name as the current instance.
         However, the snapshots are not copied to the new instance.
         """
-        return DataSet(self.pool_name, self.dataset_name)
+        new_dataset = DataSet(self.pool_name, self.dataset_name)
+        if self._dataset_size is not None:
+            new_dataset.dataset_size = self._dataset_size
+        return new_dataset
 
     def view(self):
         """
@@ -49,6 +64,31 @@ class DataSet(object):
         view_dataset = DataSet(self.pool_name, self.dataset_name)
         for snapshot in self.snapshots.values():
             view_dataset.add_snapshot(snapshot.view())
+
+        # but we now have to fix the incremental refs, as they are also cloned via .view()
+        # this results in completely new objects, but we want to keep the references to the snapshot instances under
+        # the new dataset
+        # the snapshot.view() cloning operates correctly, but for datasets, the incremental refs are not correct.
+        # it is expected to have the incremental refs pointing to the same snapshot objects as in the original dataset
+
+        for snapshot in view_dataset:
+            if snapshot.has_incremental_base():
+                incremental_base = snapshot.get_incremental_base()
+                # we have to resolve the incremental base snapshot from the original dataset
+                # and set it as the incremental base for the current snapshot
+                try:
+                    dataset_shared_incremental_base = view_dataset.snapshots[incremental_base.zfs_path]
+                except KeyError:
+                    # the incremental base is not part of the view. This can happen, if the incremental base was
+                    # filtered out previously. In this case, we have to remove the incremental base from the current
+                    # snapshot
+                    snapshot.set_incremental_base(None)
+                    continue
+                else:
+                    snapshot.set_incremental_base(dataset_shared_incremental_base)
+
+        if self._dataset_size is not None:
+            view_dataset.dataset_size = self._dataset_size
         return view_dataset
 
     def resolve_snapshot_name(self, snapshot_name: str) -> str:
@@ -71,15 +111,26 @@ class DataSet(object):
             yield snapshot
 
     def resolve_zfs_path(self, zfs_path: str) -> Snapshot:
+        """
+        Resolve a ZFS path to a snapshot object.
+
+        :raises ZfsResolveError: If the ZFS path is not found in the dataset.
+        """
         if zfs_path.startswith(self.zfs_path):
             snapshot_name = zfs_path.split("@")[1]
             return self.snapshots[snapshot_name]
-        raise ValueError("Snapshot '{}' not found in the dataset '{}'".format(zfs_path, self.zfs_path))
+        raise ZfsResolveError("Snapshot '{}' not found in the dataset '{}'".format(zfs_path, self.zfs_path))
 
     def get_snapshot_by_name(self, snapshot_name: str) -> Snapshot:
-        if snapshot_name.startswith(self.zfs_path):
-            return self.snapshots[snapshot_name]
-        return self.snapshots[self.resolve_snapshot_name(snapshot_name)]
+        """
+        Get a snapshot by its name.
+
+        :raises ValueError: If the snapshot is not found in the dataset.
+        """
+        snapshot_zfs_path = self.resolve_snapshot_name(snapshot_name)
+        if not snapshot_zfs_path in self.snapshots:
+            raise ValueError("Snapshot '{}' not found in the dataset '{}'".format(snapshot_name, self.zfs_path))
+        return self.snapshots[snapshot_zfs_path]
 
     def print(self):
         print("  Dataset: {} ({})".format(self.dataset_name, self.zfs_path))
@@ -161,7 +212,7 @@ class DataSet(object):
                 difference_dataset.remove_snapshot(snapshot)
         return difference_dataset
 
-    def is_incremental(self) -> bool:
+    def has_incremental_snapshot_refs(self) -> bool:
         return any(snapshot.has_incremental_base() for snapshot in self.snapshots.values())
 
     def has_snapshots(self):
@@ -217,3 +268,19 @@ class DataSet(object):
 
                         snapshot.set_incremental_base(incremental_base)
                     incremental_base = snapshot
+
+    def drop_snapshots(self):
+        self.snapshots.clear()
+
+    def filter_include_by_zfs_path_prefix(self, zfs_path_prefix: str) -> "DataSet":
+        """
+        Filter out all elements in the pool, which do not match the given zfs path prefix.
+        """
+        new_dataset = self.copy()
+
+        for snapshot in self.snapshots.values():
+            if snapshot.zfs_path.startswith(zfs_path_prefix):
+                snapshot_view = snapshot.view()
+                new_dataset.add_snapshot(snapshot_view)
+
+        return new_dataset

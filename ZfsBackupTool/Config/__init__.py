@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Tuple, Optional
 
 from ..ShellCommand.SshHost import SshHost
 
@@ -19,3 +19,8 @@ class BackupSource(object):
         self.recursive = recursive
         self.exclude = exclude
         self.include = include
+
+    def get_all_host_taget_paths(self) -> List[Tuple[Optional[SshHost], str]]:
+        return [(target.remote, target_path)
+                for target in self.targets
+                for target_path in target.target_paths]

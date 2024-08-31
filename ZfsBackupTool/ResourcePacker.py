@@ -2,7 +2,7 @@ import sys
 from collections import OrderedDict
 from typing import Iterable, List, Dict
 
-from ZfsBackupTool.DataSet import DataSet
+from ZfsBackupTool.Zfs import DataSet
 
 
 class ResourcePacker(object):
@@ -13,7 +13,7 @@ class ResourcePacker(object):
         # type: (int) -> None
         self.packing_method = packing_method
 
-    def getFragmentPackets(self, resource_size: int, fragments: Iterable[DataSet], allow_oversized: bool=False
+    def getFragmentPackets(self, resource_size: int, fragments: Iterable[DataSet], allow_oversized: bool = False
                            ) -> List[Dict[DataSet, int]]:
         if self.packing_method == self.BIN_PACKING:
             packets = self._get_binpacked_resources(resource_size, fragments)
@@ -49,14 +49,14 @@ class ResourcePacker(object):
         except ImportError:
             print("Please install the 'binpacking' package to use the BIN_PACKING packing method.")
             sys.exit(1)
-        return binpacking.to_constant_volume({f: f.get_dataset_size() for f in fragments}, resource_size,
+        return binpacking.to_constant_volume({f: f.dataset_size for f in fragments}, resource_size,
                                              upper_bound=resource_size + 1)
 
     def _get_sequential_filled_resources(self, resource_size, fragments):
         # type: (int, Iterable[DataSet]) -> List[Dict[DataSet, int]]
-        datasets_sizes = {f: f.get_dataset_size() for f in fragments}
+        datasets_sizes = {f: f.dataset_size for f in fragments}
 
-        buckets = []
+        buckets: List[OrderedDict[DataSet, int]] = []
         while datasets_sizes:
             # try to fill existing buckets
             for bucket in buckets:
