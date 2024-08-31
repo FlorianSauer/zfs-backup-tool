@@ -346,7 +346,7 @@ class BackupPlan(object):
                     self.shell_command.zfs_recv_snapshot_from_target(target_path, snapshot.zfs_path, restore_zfs_path)
                 except CommandExecutionError as e:
                     print(
-                        "Error restoring {} under {} from {}".format(snapshot.zfs_path, restore_zfs_path, target_path))
+                        "Error restoring {} under {} from {}: {}".format(snapshot.zfs_path, restore_zfs_path, target_path, e))
                     if i + 1 < len(host_target_paths):
                         print("Trying next target...")
                         continue
