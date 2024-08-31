@@ -369,6 +369,8 @@ class ZfsBackupTool(object):
 
         # endregion
 
+        print("Backup done.")
+
     def do_restore(self):
         # scan local zfs setup and build up incremental snapshot refs
         all_local_pools = scan_zfs_pools(self.shell_command)

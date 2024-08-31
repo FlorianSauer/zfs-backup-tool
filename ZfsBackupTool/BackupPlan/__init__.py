@@ -459,13 +459,11 @@ class BackupPlan(object):
             pool_target_paths = self._group_target_paths(targetpaths_pools)
 
             for target_paths, pools in pool_target_paths.items():
-                print("writing snapshots to target paths: ", target_paths)
+                print("writing snapshots to target paths:", ", ".join(target_paths))
                 pools.print()
                 for snapshot in pools.iter_snapshots():
-                    print("writing backup snapshot: ", snapshot.zfs_path)
+                    print("writing backup snapshot:", snapshot.zfs_path)
                     self._write_snapshot_to_target(snapshot, host, set(target_paths))
-
-            print()
 
     def clean_snapshots(self, local_pools: PoolList, zfs_path_filter: Optional[str] = None):
         # iterate over all snapshots and remove them from the target pool
