@@ -26,6 +26,7 @@ class BackupPlan(object):
             if self.dry_run:
                 print("Would have created snapshot: ", snapshot)
             else:
+                print("Creating new snapshot: ", snapshot.zfs_path)
                 self.shell_command.create_snapshot(snapshot.dataset_zfs_path, snapshot.snapshot_name)
 
     def verify_snapshots(self, verify_pools: Dict[Tuple[Optional[SshHost], str], PoolList],
