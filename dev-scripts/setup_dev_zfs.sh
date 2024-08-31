@@ -16,13 +16,21 @@ truncate -s 2G "$disk_1_file"
 zpool create -m /mnt/devpool devpool mirror "$disk_0_file" "$disk_1_file"
 
 zfs create "devpool/dataset0"
+dd if=/dev/urandom of=/mnt/devpool/dataset0/10MB.bin bs=10M count=1 iflag=fullblock
 zfs create "devpool/dataset1"
+dd if=/dev/urandom of=/mnt/devpool/dataset1/10MB.bin bs=10M count=1 iflag=fullblock
 zfs create "devpool/dataset1/dataset1-1"
+dd if=/dev/urandom of=/mnt/devpool/dataset1/dataset1-1/10MB.bin bs=10M count=1 iflag=fullblock
 zfs create "devpool/dataset1/dataset1-1/dataset1-1-1"
+dd if=/dev/urandom of=/mnt/devpool/dataset1/dataset1-1/dataset1-1-1/10MB.bin bs=10M count=1 iflag=fullblock
 zfs create "devpool/dataset2"
+dd if=/dev/urandom of=/mnt/devpool/dataset2/10MB.bin bs=10M count=1 iflag=fullblock
 zfs create "devpool/dataset2/dataset2-1"
+dd if=/dev/urandom of=/mnt/devpool/dataset2/dataset2-1/10MB.bin bs=10M count=1 iflag=fullblock
 zfs create "devpool/dataset2/dataset2-2"
+dd if=/dev/urandom of=/mnt/devpool/dataset2/dataset2-2/10MB.bin bs=10M count=1 iflag=fullblock
 zfs create "devpool/dataset3"
+dd if=/dev/urandom of=/mnt/devpool/dataset3/10MB.bin bs=10M count=1 iflag=fullblock
 zfs snapshot -r "devpool@initial_snapshot"
 
 echo "ZFS pool created"
@@ -44,7 +52,23 @@ mkdir -p "$tmp_dir"
 
 # backup the dev pool completely 3 times
 (cd "$tmp_dir/zfs-backup-tool" && python3 ./zfs-backup-tool.py "$SCRIPT_DIR/dev_config_full_backup.conf" backup)
+dd if=/dev/urandom of=/mnt/devpool/dataset0/10MB.bin bs=10M count=1 iflag=fullblock
+dd if=/dev/urandom of=/mnt/devpool/dataset1/10MB.bin bs=10M count=1 iflag=fullblock
+dd if=/dev/urandom of=/mnt/devpool/dataset1/dataset1-1/10MB.bin bs=10M count=1 iflag=fullblock
+dd if=/dev/urandom of=/mnt/devpool/dataset1/dataset1-1/dataset1-1-1/10MB.bin bs=10M count=1 iflag=fullblock
+dd if=/dev/urandom of=/mnt/devpool/dataset2/10MB.bin bs=10M count=1 iflag=fullblock
+dd if=/dev/urandom of=/mnt/devpool/dataset2/dataset2-1/10MB.bin bs=10M count=1 iflag=fullblock
+dd if=/dev/urandom of=/mnt/devpool/dataset2/dataset2-2/10MB.bin bs=10M count=1 iflag=fullblock
+dd if=/dev/urandom of=/mnt/devpool/dataset3/10MB.bin bs=10M count=1 iflag=fullblock
 (cd "$tmp_dir/zfs-backup-tool" && python3 ./zfs-backup-tool.py "$SCRIPT_DIR/dev_config_full_backup.conf" backup)
+dd if=/dev/urandom of=/mnt/devpool/dataset0/10MB.bin bs=10M count=1 iflag=fullblock
+dd if=/dev/urandom of=/mnt/devpool/dataset1/10MB.bin bs=10M count=1 iflag=fullblock
+dd if=/dev/urandom of=/mnt/devpool/dataset1/dataset1-1/10MB.bin bs=10M count=1 iflag=fullblock
+dd if=/dev/urandom of=/mnt/devpool/dataset1/dataset1-1/dataset1-1-1/10MB.bin bs=10M count=1 iflag=fullblock
+dd if=/dev/urandom of=/mnt/devpool/dataset2/10MB.bin bs=10M count=1 iflag=fullblock
+dd if=/dev/urandom of=/mnt/devpool/dataset2/dataset2-1/10MB.bin bs=10M count=1 iflag=fullblock
+dd if=/dev/urandom of=/mnt/devpool/dataset2/dataset2-2/10MB.bin bs=10M count=1 iflag=fullblock
+dd if=/dev/urandom of=/mnt/devpool/dataset3/10MB.bin bs=10M count=1 iflag=fullblock
 (cd "$tmp_dir/zfs-backup-tool" && python3 ./zfs-backup-tool.py "$SCRIPT_DIR/dev_config_full_backup.conf" backup)
 # and verify the backups
 (cd "$tmp_dir/zfs-backup-tool" && python3 ./zfs-backup-tool.py "$SCRIPT_DIR/dev_config_full_backup.conf" verify)
