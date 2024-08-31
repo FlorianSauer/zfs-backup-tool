@@ -61,9 +61,9 @@ class ZfsBackupTool(object):
                                     'Deletes all existing backup snapshots before regular backup process.')
     backup_parser.add_argument('--clean', action='store_true',
                                help='Removes all backup snapshots. Does not create new backup.')
-    backup_parser.add_argument('--missing', action='store_true',
-                               help='Re-create backups only for missing snapshots. '
-                                    'Skips creation of a new incremental backup. '
+    backup_parser.add_argument('--missing', '--repair', action='store_true',
+                               help='REPAIR-MODE: Re-create backups only for missing snapshots. '
+                                    'Skips creation of a new incremental backups. '
                                     'Useful for resuming previously aborted backup runs.')
     backup_parser.add_argument('-f', '--filter',
                                help='Create new backups only for datasets starting with given filter.')
