@@ -84,6 +84,8 @@ class ZfsBackupTool(object):
                                                           'WARNING: This will may cause temporary data loss.')
     restore_parser.add_argument('-f', '--filter',
                                 help='Perform restore only for datasets starting with given filter.')
+    restore_parser.add_argument('--force', action='store_true',
+                                help='Force restore, even if the target dataset exists has all expected snapshots.')
     verify_parser = subparsers.add_parser('verify', help='Verify datasets and their snapshots on targets.',
                                           description='Verify datasets and their snapshots on targets.')
     verify_parser.add_argument('-a', '--all', action='store_true',
@@ -410,15 +412,24 @@ class ZfsBackupTool(object):
         # we can now build up a list of pools/datasets/snapshots that need to be repaired logically.
         # after that we will find out, where we can fetch the repair data from
 
-        # we will now build up a list of pools/datasets/snapshots that need to be repaired logically
         repair_pools: PoolList = PoolList()
         for source, remote_pool in configured_remote_pools_sources_mapping.items():
-            local_pool = configured_local_pools_sources_mapping[source]
-            repair_diff = remote_pool.difference(local_pool)
+            if self.cli_args.force:
+                # force restore, even if the target dataset exists and has all expected snapshots
+                repair_diff = remote_pool.view()
+            else:
+                local_pool = configured_local_pools_sources_mapping[source]
+                repair_diff = remote_pool.difference(local_pool)
+            if self.cli_args.filter:
+                repair_diff = repair_diff.filter_include_by_zfs_path_prefix(self.cli_args.filter)
             if repair_diff.has_snapshots():
                 print("Repairing source: ", source.name)
                 repair_diff.print()
                 repair_pools = PoolList.merge(repair_pools, repair_diff)
+
+        if not repair_pools.has_snapshots():
+            print("No snapshots need repairing, all ok :)")
+            return
 
         print("hard missing snapshots:")
         repair_pools.print()
