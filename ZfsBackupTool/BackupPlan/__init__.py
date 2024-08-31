@@ -443,7 +443,7 @@ class BackupPlan(object):
             else:
                 assert restore_target
                 restore_target = os.path.join(restore_target, snapshot.dataset_zfs_path)
-            print("Repairing snapshot '{}' into '{}'", snapshot.zfs_path)
+            print("Repairing snapshot '{}' into '{}'".format(snapshot.zfs_path, restore_target))
             self._restore_snapshot_from_target(sources, snapshot, restore_target)
 
     def backup_snapshots(self, backup_pools: Dict[Tuple[Optional[SshHost], str], PoolList]):
