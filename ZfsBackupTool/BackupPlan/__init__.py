@@ -63,7 +63,8 @@ class BackupPlan(object):
             for target_paths, pools in pool_target_paths.items():
                 for snapshot in pools.iter_snapshots():
                     if not self._verify_snapshot_on_target(snapshot, host, list(target_paths),
-                                                           remove_invalid=remove_invalid):
+                                                           remove_invalid=remove_invalid,
+                                                           force_recalculate=True):
                         verify_failed = True
         if verify_failed:
             print("Aborting...")
@@ -95,7 +96,7 @@ class BackupPlan(object):
         return mismatching_checksums
 
     def _verify_snapshot_on_target(self, snapshot: Snapshot, host: Optional[SshHost], target_paths: List[str],
-                                   remove_invalid: bool = False) -> bool:
+                                   remove_invalid: bool = False, force_recalculate=False) -> bool:
         """
         :return: True if all checksums match, False if at least one checksum mismatch was found
         """
@@ -127,21 +128,25 @@ class BackupPlan(object):
 
         # read the calculated checksum from the calculated checksum file
         calculated_checksums: Dict[str, Optional[str]] = {}
-        for target_path in target_paths:
-            if not expected_checksums[target_path]:
-                # if the expected checksum is missing, we cannot calculate the checksum
+        if force_recalculate:
+            for target_path in target_paths:
                 calculated_checksums[target_path] = None
-                continue
-            try:
-                calculated_checksum = self.shell_command.target_read_checksum_from_file(
-                    os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, snapshot.dataset_zfs_path,
-                                 snapshot.snapshot_name + BACKUP_FILE_POSTFIX + CALCULATED_CHECKSUM_FILE_POSTFIX))
-            except CommandExecutionError:
-                calculated_checksum = None
-            if self.dry_run and calculated_checksum:
-                calculated_checksums[target_path] = "dry-run"
-            else:
-                calculated_checksums[target_path] = calculated_checksum
+        else:
+            for target_path in target_paths:
+                if not expected_checksums[target_path]:
+                    # if the expected checksum is missing, we cannot calculate the checksum
+                    calculated_checksums[target_path] = None
+                    continue
+                try:
+                    calculated_checksum = self.shell_command.target_read_checksum_from_file(
+                        os.path.join(target_path, TARGET_STORAGE_SUBDIRECTORY, snapshot.dataset_zfs_path,
+                                     snapshot.snapshot_name + BACKUP_FILE_POSTFIX + CALCULATED_CHECKSUM_FILE_POSTFIX))
+                except CommandExecutionError:
+                    calculated_checksum = None
+                if self.dry_run and calculated_checksum:
+                    calculated_checksums[target_path] = "dry-run"
+                else:
+                    calculated_checksums[target_path] = calculated_checksum
 
         # if the calculated checksum is missing, recalculate it
         if not all(calculated_checksums.values()):
