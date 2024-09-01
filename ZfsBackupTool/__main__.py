@@ -509,14 +509,14 @@ class ZfsBackupTool(object):
 
                 # verify that the intermediate needed snapshots are not existing on the local side
                 if incremental_children_dataset.intersection(current_local_dataset).has_snapshots():
-                    print("Intermediate snapshots are existing on the local side")
-                    print("This would fail the restore process")
                     if self.cli_args.force:
                         print("removing existing intermediate snapshots on local side")
                         self.backup_plan.clean_snapshots(
                             incremental_children_dataset.intersection(current_local_dataset),
                             zfs_path_filter=self.cli_args.filter)
                     else:
+                        print("Intermediate snapshots are existing on the local side for dataset: {}".format(
+                            dataset.zfs_path))
                         conflicting_intermediate_snapshots.add_dataset(
                             incremental_children_dataset.intersection(current_local_dataset))
 
