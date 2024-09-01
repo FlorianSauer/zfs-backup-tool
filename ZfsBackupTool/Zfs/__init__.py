@@ -64,12 +64,21 @@ class PoolList(object):
         """
         return PoolList(*[pool.copy() for pool in self.pools.values()])
 
+    def prefixed_view(self, prefix: str):
+        """
+        Creates a full copy of the current PoolList instance including all sub-references.
+        Sub-references are also copied and not just referenced.
+        All zfs paths are prefixed with the given prefix. This can be used to 'shift' the pool list to a different
+        location in the zfs hierarchy.
+        """
+        return PoolList(*[pool.prefixed_view(prefix) for pool in self.pools.values()])
+
     def view(self):
         """
         Creates a full copy of the current PoolList instance including all sub-references.
         Sub-references are also copied and not just referenced.
         """
-        return PoolList(*[pool.view() for pool in self.pools.values()])
+        return self.prefixed_view('')
 
     def add_pool(self, pool: Pool):
         if pool.pool_name in self.pools:

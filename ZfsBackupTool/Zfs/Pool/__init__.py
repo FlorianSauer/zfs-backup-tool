@@ -41,15 +41,25 @@ class Pool(object):
         """
         return Pool(self.pool_name)
 
+    def prefixed_view(self, prefix: str):
+        """
+        Creates a full copy of the current Pool instance including all sub-references.
+        Sub-references are also copied and not just referenced.
+        All zfs paths are prefixed with the given prefix. This can be used to 'shift' the pool to a different
+        location in the zfs hierarchy.
+        """
+        pool_name = (prefix + self.pool_name).split("/", 1)[0]
+        view_pool = Pool(pool_name)
+        for dataset in self.datasets.values():
+            view_pool.add_dataset(dataset.prefixed_view(prefix))
+        return view_pool
+
     def view(self):
         """
         Creates a full copy of the current Pool instance including all sub-references.
         Sub-references are also copied and not just referenced.
         """
-        view_pool = Pool(self.pool_name)
-        for dataset in self.datasets.values():
-            view_pool.add_dataset(dataset.view())
-        return view_pool
+        return self.prefixed_view('')
 
     def resolve_dataset_name(self, dataset_name: str) -> str:
         return "{}/{}".format(self.pool_name, dataset_name)

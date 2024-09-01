@@ -382,6 +382,16 @@ class ZfsBackupTool(object):
         print("Backup done.")
 
     def do_restore(self):
+        if self.cli_args.restore.startswith('/'):
+            print("Zfs path must not start with /")
+            sys.exit(1)
+        if self.cli_args.restore == '.':
+            restore_prefix = ''
+        else:
+            restore_prefix = self.cli_args.restore
+            if not restore_prefix.endswith('/'):
+                restore_prefix += '/'
+
         # scan local zfs setup and build up incremental snapshot refs
         all_local_pools = scan_zfs_pools(self.shell_command)
         all_local_pools.build_incremental_snapshot_refs()
@@ -417,8 +427,22 @@ class ZfsBackupTool(object):
 
         repair_pools: PoolList = PoolList()
         for source, remote_pool in configured_remote_pools_sources_mapping.items():
-            local_pool = configured_local_pools_sources_mapping[source]
-            repair_diff = remote_pool.difference(local_pool)
+            # the main problem is the shifting of the backup into another zfs path position with the
+            # self.cli_args.restore parameter. we need to find out, which snapshots are missing locally.
+            # first we need to do the actual shifting of the logical target-state into the correct zfs path position.
+            if not restore_prefix:
+                # for inplace (empty restore_prefix) we do not need any shifting
+                final_expected_pool = remote_pool
+            else:
+                final_expected_pool = remote_pool.prefixed_view(restore_prefix)
+            # now we need to find the missing snapshots on the local side
+            # for this we can combine the current local pool with the final expected pool
+            # afterwards we can find the difference between the two, so we get a set of effectively missing snapshots
+            # worst case: the whole shifted view is returned, because all is missing under the target path
+            # mixed case: some datasets are missing, some are not. we need to repair the missing ones.
+            repair_diff = PoolList.merge(all_local_pools, final_expected_pool).difference(all_local_pools)
+            # local_pool = configured_local_pools_sources_mapping[source]
+            # repair_diff = remote_pool.difference(local_pool)
             if self.cli_args.filter:
                 repair_diff = repair_diff.filter_include_by_zfs_path_prefix(self.cli_args.filter)
             if repair_diff.has_snapshots():
@@ -525,16 +549,16 @@ class ZfsBackupTool(object):
                                                                                remote_pools_host_paths_mapping)
 
         # we now have a list of snapshots and the host-target-path-mappings from where we can fetch the repair data from
-        if self.cli_args.restore == '.':
+        if restore_prefix:
+            # restore to given path
+            self.backup_plan.restore_snapshots(repair_snapshot_restore_source_mapping,
+                                               restore_target=restore_prefix,
+                                               inplace=False,
+                                               initial_wipe=self.cli_args.wipe)
+        else:
             # inplace restore
             self.backup_plan.restore_snapshots(repair_snapshot_restore_source_mapping,
                                                inplace=True,
-                                               initial_wipe=self.cli_args.wipe)
-        else:
-            # restore to given path
-            self.backup_plan.restore_snapshots(repair_snapshot_restore_source_mapping,
-                                               restore_target=self.cli_args.restore,
-                                               inplace=False,
                                                initial_wipe=self.cli_args.wipe)
 
     def do_verify(self):

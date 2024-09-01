@@ -56,14 +56,20 @@ class DataSet(object):
             new_dataset.dataset_size = self._dataset_size
         return new_dataset
 
-    def view(self):
+    def prefixed_view(self, prefix: str):
         """
         Creates a full copy of the current DataSet instance including all sub-references.
         Sub-references are also copied and not just referenced.
+        All zfs paths are prefixed with the given prefix. This can be used to 'shift' the dataset to a different
+        location in the zfs hierarchy.
         """
-        view_dataset = DataSet(self.pool_name, self.dataset_name)
+        prefixed_zfs_path = prefix + self.zfs_path
+        pool_name = prefixed_zfs_path.split("/", 1)[0]
+        dataset_name = prefixed_zfs_path.split("/", 1)[1]
+
+        view_dataset = DataSet(pool_name, dataset_name)
         for snapshot in self.snapshots.values():
-            view_dataset.add_snapshot(snapshot.view())
+            view_dataset.add_snapshot(snapshot.prefixed_view(prefix))
 
         # but we now have to fix the incremental refs, as they are also cloned via .view()
         # this results in completely new objects, but we want to keep the references to the snapshot instances under
@@ -93,6 +99,13 @@ class DataSet(object):
         if self._dataset_size is not None:
             view_dataset.dataset_size = self._dataset_size
         return view_dataset
+
+    def view(self):
+        """
+        Creates a full copy of the current DataSet instance including all sub-references.
+        Sub-references are also copied and not just referenced.
+        """
+        return self.prefixed_view('')
 
     def resolve_snapshot_name(self, snapshot_name: str) -> str:
         return "{}@{}".format(self.zfs_path, snapshot_name)
