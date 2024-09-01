@@ -513,36 +513,6 @@ class ZfsBackupTool(object):
 
         repair_pools_with_intermediate_children = PoolList.merge(repair_pools, intermediate_children_of_repair_pools)
 
-        # we also have to check, if the target datasets already have snapshots, if we restore an initial snapshot
-        # if this is the case, we need to wipe the dataset before restoring the initial snapshot
-        # otherwise the restore would fail, because zfs recv -F only works on empty datasets
-        for dataset in repair_pools_with_intermediate_children.iter_datasets():
-            try:
-                dataset.get_snapshot_by_name(self.config.snapshot_prefix
-                                             + SNAPSHOT_PREFIX_POSTFIX_SEPARATOR
-                                             + INITIAL_SNAPSHOT_POSTFIX)
-            except ZfsResolveError:
-                # only problematic for initial snapshots
-                continue
-            already_existing_local_dataset = all_local_pools.get_dataset_by_path(dataset.zfs_path)
-            if already_existing_local_dataset.difference(dataset).has_snapshots():
-                if self.cli_args.force:
-                    cleanup_pool = Pool(already_existing_local_dataset.pool_name)
-                    cleanup_pool.add_dataset(already_existing_local_dataset)
-                    cleanup_pools = PoolList(cleanup_pool)
-
-                    print("Wiping dataset {} because it already has snapshots".format(dataset.zfs_path))
-                    cleanup_pool.print()
-                    self.backup_plan.clean_snapshots(cleanup_pools,
-                                                     zfs_path_filter=self.cli_args.filter)
-                else:
-                    # we need to wipe the dataset before restore
-                    print("Dataset {} already has snapshots, restore is not possible without wiping".format(
-                        dataset.zfs_path))
-                    print("Use --force to wipe the dataset")
-                    print("Aborting...")
-                    sys.exit(1)
-
         # we now have a list of pools/datasets/snapshots that need to be repaired
         # we will now find out, where we can fetch the repair data from
         print("hard missing snapshots with intermediate children")

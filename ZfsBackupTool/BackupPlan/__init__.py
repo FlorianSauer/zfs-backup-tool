@@ -460,6 +460,19 @@ class BackupPlan(object):
             else:
                 assert restore_target
                 _restore_target = os.path.join(restore_target, snapshot.dataset_zfs_path)
+            if snapshot.snapshot_name.endswith(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR + INITIAL_SNAPSHOT_POSTFIX):
+                if self.shell_command.has_dataset(_restore_target) and self.shell_command.list_snapshots(_restore_target):
+                    print("Dataset {} already has snapshots.".format(_restore_target))
+                    if initial_wipe:
+                        print("Wiping dataset {}...".format(_restore_target))
+                        if self.dry_run:
+                            print("Would have wiped dataset {}...".format(_restore_target))
+                        else:
+                            self.shell_command.delete_dataset(_restore_target)
+                    else:
+                        print("Cannot restore initial snapshots, if the dataset already has snapshots.")
+                        print("Aborting...")
+                        sys.exit(1)
             print("Restoring snapshot '{}' into '{}'".format(snapshot.zfs_path, restore_target))
             self._restore_snapshot_from_target(sources, snapshot, _restore_target, initial_wipe)
 
