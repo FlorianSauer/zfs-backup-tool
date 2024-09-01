@@ -100,6 +100,7 @@ class PoolList(object):
         poolname = dataset.pool_name
         if poolname not in self.pools:
             pool = Pool(poolname)
+            self.pools[poolname] = pool
         else:
             pool = self.pools[poolname]
         pool.add_dataset(dataset)
