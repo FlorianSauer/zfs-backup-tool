@@ -479,7 +479,7 @@ class BackupPlan(object):
                               "backup snapshot.")
                         print("Aborting...")
                         sys.exit(1)
-            print("Restoring snapshot '{}' into '{}'".format(snapshot.zfs_path, restore_target))
+            print("Restoring snapshot '{}' into '{}'".format(snapshot.zfs_path, _restore_target))
             self._restore_snapshot_from_target(sources, snapshot, _restore_target, initial_wipe)
 
     def backup_snapshots(self, backup_pools: Dict[Tuple[Optional[SshHost], str], PoolList]):
