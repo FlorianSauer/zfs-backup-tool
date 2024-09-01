@@ -468,6 +468,10 @@ class BackupPlan(object):
                         if self.dry_run:
                             print("Would have wiped dataset {}...".format(_restore_target))
                         else:
+                            # why is wiping needed?
+                            # A: restoring an initial snapshot into an already existing dataset is possible.
+                            #    However, if the initial snapshot is encrypted, the dataset must be deleted before,
+                            #    otherwise the encryption would be stripped away.
                             self.shell_command.delete_dataset(_restore_target)
                     else:
                         print("Cannot restore initial snapshots, if the dataset already has snapshots.")
