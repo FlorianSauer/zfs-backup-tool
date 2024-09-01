@@ -473,7 +473,7 @@ class ZfsBackupTool(object):
         all_local_configured_pools = PoolList.merge(*configured_local_pools_sources_mapping.values())
 
         intermediate_children_of_repair_pools: PoolList = PoolList()
-        abort_due_to_existing_intermediate_snapshots = False
+        conflicting_intermediate_snapshots = PoolList()
         for pool in repair_pools:
             repair_pool = pool.copy()
             intermediate_children_of_repair_pools.add_pool(repair_pool)
@@ -517,10 +517,9 @@ class ZfsBackupTool(object):
                             incremental_children_dataset.intersection(current_local_dataset),
                             zfs_path_filter=self.cli_args.filter)
                     else:
-                        print("The following intermediate snapshots need to be removed on the local side")
-                        incremental_children_dataset.intersection(current_local_dataset).print()
-                        print("Use --force to remove them")
-                        abort_due_to_existing_intermediate_snapshots = True
+                        conflicting_intermediate_snapshots = PoolList.merge(
+                            conflicting_intermediate_snapshots,
+                            incremental_children_dataset.intersection(current_local_dataset))
 
                 # verify that no intermediate snapshot is missing
                 if any(not snapshot.has_incremental_base()
@@ -532,9 +531,13 @@ class ZfsBackupTool(object):
 
                 repair_pool.add_dataset(incremental_children_dataset)
 
-        if abort_due_to_existing_intermediate_snapshots:
+        if conflicting_intermediate_snapshots.has_snapshots():
+            print("Error:")
+            print("The following intermediate snapshots need to be removed on the local side")
+            conflicting_intermediate_snapshots.print()
+            print("Use --force to remove them")
             print("Aborting due to existing intermediate snapshots on local side")
-            return
+            sys.exit(1)
 
         repair_pools_with_intermediate_children = PoolList.merge(repair_pools, intermediate_children_of_repair_pools)
 
