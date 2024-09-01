@@ -2,7 +2,7 @@ from typing import Dict, Iterator, List, Iterable, Optional
 
 from ZfsBackupTool.Constants import SNAPSHOT_PREFIX_POSTFIX_SEPARATOR, INITIAL_SNAPSHOT_POSTFIX
 from .Snapshot import Snapshot
-from ...errors import ZfsResolveError
+from ...errors import ZfsResolveError, ZfsAddError
 
 
 class DataSet(object):
@@ -56,20 +56,23 @@ class DataSet(object):
             new_dataset.dataset_size = self._dataset_size
         return new_dataset
 
-    def prefixed_view(self, prefix: str):
+    def prefixed_view(self, prefix: str, deshift: bool = False) -> 'DataSet':
         """
         Creates a full copy of the current DataSet instance including all sub-references.
         Sub-references are also copied and not just referenced.
         All zfs paths are prefixed with the given prefix. This can be used to 'shift' the dataset to a different
         location in the zfs hierarchy.
         """
-        prefixed_zfs_path = prefix + self.zfs_path
+        if deshift:
+            prefixed_zfs_path = self.zfs_path.replace(prefix, '', 1)
+        else:
+            prefixed_zfs_path = prefix + self.zfs_path
         pool_name = prefixed_zfs_path.split("/", 1)[0]
         dataset_name = prefixed_zfs_path.split("/", 1)[1]
 
         view_dataset = DataSet(pool_name, dataset_name)
         for snapshot in self.snapshots.values():
-            view_dataset.add_snapshot(snapshot.prefixed_view(prefix))
+            view_dataset.add_snapshot(snapshot.prefixed_view(prefix, deshift))
 
         # but we now have to fix the incremental refs, as they are also cloned via .view()
         # this results in completely new objects, but we want to keep the references to the snapshot instances under
@@ -112,7 +115,7 @@ class DataSet(object):
 
     def add_snapshot(self, snapshot: Snapshot):
         if snapshot.zfs_path in self.snapshots:
-            raise ValueError(
+            raise ZfsAddError(
                 "Dataset '{}' already added to the pool '{}'".format(snapshot.snapshot_name, self.zfs_path))
         self.snapshots[snapshot.zfs_path] = snapshot
 

@@ -6,7 +6,7 @@ from ZfsBackupTool.ShellCommand import ShellCommand
 from .Pool import Pool
 from .Pool.Dataset import DataSet
 from .Pool.Dataset.Snapshot import Snapshot
-from .errors import ZfsResolveError
+from .errors import ZfsResolveError, ZfsDeshiftError, ZfsAddError
 
 __all__ = [
     'scan_zfs_pools', 'scan_filebased_zfs_pools',
@@ -64,14 +64,20 @@ class PoolList(object):
         """
         return PoolList(*[pool.copy() for pool in self.pools.values()])
 
-    def prefixed_view(self, prefix: str):
+    def prefixed_view(self, prefix: str, deshift: bool = False):
         """
         Creates a full copy of the current PoolList instance including all sub-references.
         Sub-references are also copied and not just referenced.
         All zfs paths are prefixed with the given prefix. This can be used to 'shift' the pool list to a different
         location in the zfs hierarchy.
         """
-        return PoolList(*[pool.prefixed_view(prefix) for pool in self.pools.values()])
+        pool_list = [pool.prefixed_view(prefix, deshift) for pool in self.pools.values()]
+        if deshift:
+            # check if the de-shifting created multiple pools with the same name
+            pool_names = {pool.pool_name: pool for pool in pool_list}
+            if len(pool_names) != len(pool_list):
+                raise ZfsDeshiftError("De-shifting the pool list created multiple pools with the same name")
+        return PoolList(*pool_list)
 
     def view(self):
         """
@@ -82,7 +88,7 @@ class PoolList(object):
 
     def add_pool(self, pool: Pool):
         if pool.pool_name in self.pools:
-            raise ValueError("Pool '{}' already added to the pool list".format(pool.pool_name))
+            raise ZfsAddError("Pool '{}' already added to the pool list".format(pool.pool_name))
         self.pools[pool.pool_name] = pool
 
     def remove_pool(self, pool: Pool):

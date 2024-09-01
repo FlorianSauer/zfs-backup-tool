@@ -31,20 +31,23 @@ class Snapshot(object):
         """
         return Snapshot(self.pool_name, self.dataset_name, self.snapshot_name)
 
-    def prefixed_view(self, prefix: str):
+    def prefixed_view(self, prefix: str, deshift: bool = False) -> 'Snapshot':
         """
         Creates a full copy of the current DataSet instance including all sub-references.
         Sub-references are also copied and not just referenced.
         All zfs paths are prefixed with the given prefix. This can be used to 'shift' the snapshot to a different
         location in the zfs hierarchy.
         """
-        prefixed_zfs_path = prefix + self.dataset_zfs_path
+        if deshift:
+            prefixed_zfs_path = self.dataset_zfs_path.replace(prefix, '', 1)
+        else:
+            prefixed_zfs_path = prefix + self.dataset_zfs_path
         pool_name = prefixed_zfs_path.split("/", 1)[0]
         dataset_name = prefixed_zfs_path.split("/", 1)[1]
 
         view_snapshot = Snapshot(pool_name, dataset_name, self.snapshot_name)
         if self._incremental_base:
-            view_snapshot._incremental_base = self._incremental_base.prefixed_view(prefix)
+            view_snapshot._incremental_base = self._incremental_base.prefixed_view(prefix, deshift)
         return view_snapshot
 
     def view(self):

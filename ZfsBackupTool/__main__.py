@@ -545,9 +545,12 @@ class ZfsBackupTool(object):
 
         # we only need the snapshot objects in the correct order and the host-target-path-mappings from where to fetch
         # the snapshot data from
-
-        repair_snapshot_restore_source_mapping = map_snapshots_to_data_sources(repair_pools_with_intermediate_children,
-                                                                               remote_pools_host_paths_mapping)
+        # but our repair set is shifted by the restore_prefix, so we need to de-shift the repair set
+        de_shifted_repair_pools_with_intermediate_children = repair_pools_with_intermediate_children.prefixed_view(
+            restore_prefix, deshift=True)
+        repair_snapshot_restore_source_mapping = map_snapshots_to_data_sources(
+            de_shifted_repair_pools_with_intermediate_children,
+            remote_pools_host_paths_mapping)
 
         # we now have a list of snapshots and the host-target-path-mappings from where we can fetch the repair data from
         if restore_prefix:

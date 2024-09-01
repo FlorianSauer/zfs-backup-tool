@@ -2,7 +2,7 @@ from typing import Dict, List, Iterator, Iterable, Union
 
 from .Dataset import DataSet
 from .Dataset.Snapshot import Snapshot
-from ..errors import ZfsResolveError
+from ..errors import ZfsResolveError, ZfsAddError, ZfsDeshiftError
 
 
 class Pool(object):
@@ -41,7 +41,7 @@ class Pool(object):
         """
         return Pool(self.pool_name)
 
-    def prefixed_view(self, prefix: str):
+    def prefixed_view(self, prefix: str, deshift: bool = False) -> 'Pool':
         """
         Creates a full copy of the current Pool instance including all sub-references.
         Sub-references are also copied and not just referenced.
@@ -50,8 +50,15 @@ class Pool(object):
         """
         pool_name = (prefix + self.pool_name).split("/", 1)[0]
         view_pool = Pool(pool_name)
-        for dataset in self.datasets.values():
-            view_pool.add_dataset(dataset.prefixed_view(prefix))
+
+        dataset_list = [dataset.prefixed_view(prefix, deshift) for dataset in self.datasets.values()]
+        if deshift:
+            # check if the de-shifting created multiple datasets with the same name
+            dataset_names = {dataset.zfs_path: dataset for dataset in dataset_list}
+            if len(dataset_names) != len(dataset_list):
+                raise ZfsDeshiftError("De-shifting the pool created multiple datasets with the same name")
+        for dataset in dataset_list:
+            view_pool.add_dataset(dataset)
         return view_pool
 
     def view(self):
@@ -66,9 +73,9 @@ class Pool(object):
 
     def add_dataset(self, dataset: DataSet):
         if dataset.zfs_path in self.datasets:
-            raise ValueError("Dataset '{}' already added to the pool '{}'".format(dataset.zfs_path, self.pool_name))
+            raise ZfsAddError("Dataset '{}' already added to the pool '{}'".format(dataset.zfs_path, self.pool_name))
         if dataset.pool_name != self.pool_name:
-            raise ValueError("Dataset '{}' must have the same pool name as the pool '{}'".format(dataset.zfs_path,
+            raise ZfsAddError("Dataset '{}' must have the same pool name as the pool '{}'".format(dataset.zfs_path,
                                                                                                  self.pool_name))
         self.datasets[dataset.zfs_path] = dataset
 
