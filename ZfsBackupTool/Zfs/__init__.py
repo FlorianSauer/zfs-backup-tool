@@ -96,6 +96,14 @@ class PoolList(object):
             raise ValueError("Pool '{}' not found in the pool list".format(pool.pool_name))
         self.pools.pop(pool.pool_name)
 
+    def add_dataset(self, dataset: DataSet):
+        poolname = dataset.pool_name
+        if poolname not in self.pools:
+            pool = Pool(poolname)
+        else:
+            pool = self.pools[poolname]
+        pool.add_dataset(dataset)
+
     def iter_pools(self) -> Iterable[Pool]:
         for pool in self:
             yield pool

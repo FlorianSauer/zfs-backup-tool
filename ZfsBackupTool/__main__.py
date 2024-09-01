@@ -517,8 +517,7 @@ class ZfsBackupTool(object):
                             incremental_children_dataset.intersection(current_local_dataset),
                             zfs_path_filter=self.cli_args.filter)
                     else:
-                        conflicting_intermediate_snapshots = PoolList.merge(
-                            conflicting_intermediate_snapshots,
+                        conflicting_intermediate_snapshots.add_dataset(
                             incremental_children_dataset.intersection(current_local_dataset))
 
                 # verify that no intermediate snapshot is missing
