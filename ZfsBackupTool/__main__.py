@@ -565,6 +565,8 @@ class ZfsBackupTool(object):
                                                inplace=True,
                                                initial_wipe=self.cli_args.wipe)
 
+        print("Restore done.")
+
     def do_verify(self):
         # scan local zfs setup
         local_pools = scan_zfs_pools(self.shell_command)
