@@ -4,7 +4,7 @@ from itertools import combinations
 from typing import Dict, Tuple, Optional, Set, List, cast
 
 from ..Constants import (TARGET_STORAGE_SUBDIRECTORY, BACKUP_FILE_POSTFIX, EXPECTED_CHECKSUM_FILE_POSTFIX,
-                         CALCULATED_CHECKSUM_FILE_POSTFIX)
+                         CALCULATED_CHECKSUM_FILE_POSTFIX, INITIAL_SNAPSHOT_POSTFIX, SNAPSHOT_PREFIX_POSTFIX_SEPARATOR)
 from ..ShellCommand import ShellCommand, SshHost
 from ..ShellCommand.Base import CommandExecutionError
 from ..Zfs import Snapshot, PoolList
@@ -333,19 +333,27 @@ class BackupPlan(object):
 
     def _restore_snapshot_from_target(self, host_target_paths: List[Tuple[Optional[SshHost], str]],
                                       snapshot: Snapshot,
-                                      restore_zfs_path: str):
+                                      restore_zfs_path: str,
+                                      initial_wipe: bool = False):
         for i, (host, target_path) in enumerate(sorted(host_target_paths, key=lambda x: x[1])):
             self.shell_command.set_remote_host(host)
-            if self.shell_command.has_snapshot(restore_zfs_path, snapshot.snapshot_name):
-                print("Snapshot {}@{} already exists under {}".format(
-                    snapshot.dataset_zfs_path, snapshot.snapshot_name, restore_zfs_path))
-                print("Cannot restore snapshot {}@{} under {} because it already exists".format(
-                        snapshot.dataset_zfs_path, snapshot.snapshot_name, restore_zfs_path))
-                print("Aborting...")
-                sys.exit(1)
 
             print("Restoring backup snapshot {} from target {}...".format(
                 snapshot.zfs_path, target_path))
+            if snapshot.snapshot_name.endswith(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR+INITIAL_SNAPSHOT_POSTFIX):
+                if self.shell_command.has_dataset(restore_zfs_path) and self.shell_command.list_snapshots(restore_zfs_path):
+                    print("Dataset {} already has snapshots.".format(snapshot.dataset_zfs_path))
+                    if initial_wipe:
+                        print("Wiping dataset {}...".format(snapshot.dataset_zfs_path))
+                        if self.dry_run:
+                            print("Would have wiped dataset {}...".format(snapshot.dataset_zfs_path))
+                        else:
+                            self.shell_command.delete_dataset(snapshot.dataset_zfs_path)
+                    else:
+                        print("Cannot restore initial snapshots, if the dataset already has snapshots.")
+
+                        print("Aborting...")
+                        sys.exit(1)
             if self.dry_run:
                 print("Would have restored backup snapshot {} from target {}".format(
                     snapshot.zfs_path, target_path))
@@ -439,7 +447,7 @@ class BackupPlan(object):
             print()
 
     def restore_snapshots(self, restore_snapshots: List[Tuple[Snapshot, List[Tuple[Optional[SshHost], str]]]],
-                          restore_target: Optional[str] = None, inplace: bool = False):
+                          restore_target: Optional[str] = None, inplace: bool = False, initial_wipe:bool=False):
         if not inplace and restore_target is None:
             raise ValueError("Restore target must be specified if not restoring inplace.")
         if restore_target:
@@ -451,8 +459,8 @@ class BackupPlan(object):
             else:
                 assert restore_target
                 restore_target = os.path.join(restore_target, snapshot.dataset_zfs_path)
-            print("Repairing snapshot '{}' into '{}'".format(snapshot.zfs_path, restore_target))
-            self._restore_snapshot_from_target(sources, snapshot, restore_target)
+            print("Restoring snapshot '{}' into '{}'".format(snapshot.zfs_path, restore_target))
+            self._restore_snapshot_from_target(sources, snapshot, restore_target, initial_wipe)
 
     def backup_snapshots(self, backup_pools: Dict[Tuple[Optional[SshHost], str], PoolList]):
         """

@@ -25,7 +25,7 @@ class ZfsCommands(BaseShellCommand):
         command += ' "{}"'.format(pool)
         sub_process = self._execute(command, capture_output=True)
         stdout_lines = sub_process.stdout.read().decode('utf-8').splitlines() if sub_process.stdout else []
-        datasets = [line.strip().replace(pool + '/', '') for line in stdout_lines if line.strip() != pool]
+        datasets = [line.strip().replace(pool + '/', '', 1) for line in stdout_lines if line.strip() != pool]
         return datasets
 
     def list_snapshots(self, dataset: str) -> List[str]:
@@ -87,6 +87,14 @@ class ZfsCommands(BaseShellCommand):
 
     def create_snapshot(self, source_dataset: str, next_snapshot: str):
         command = 'zfs snapshot "{}@{}"'.format(source_dataset, next_snapshot)
+        return self._execute(command, capture_output=False)
+
+    def create_dataset(self, source_dataset: str):
+        command = 'zfs create "{}"'.format(source_dataset)
+        return self._execute(command, capture_output=False)
+
+    def delete_dataset(self, dataset_zfs_path: str):
+        command = 'zfs destroy -r "{}"'.format(dataset_zfs_path)
         return self._execute(command, capture_output=False)
 
     def delete_snapshot(self, snapshot_zfs_path: str):
@@ -167,7 +175,7 @@ class ZfsCommands(BaseShellCommand):
         for restore_dataset_part in restore_target_needed_dataset_parts:
             re_joined_zfs_path_parts = os.path.join(re_joined_zfs_path_parts, restore_dataset_part)
             if not self.has_dataset(re_joined_zfs_path_parts):
-                self._execute('zfs create "{}"'.format(re_joined_zfs_path_parts), capture_output=False)
+                self.create_dataset(re_joined_zfs_path_parts)
 
         # except of the pool and the last dataset segment, all datasets are created.
         # the last dataset segment is created by zfs recv

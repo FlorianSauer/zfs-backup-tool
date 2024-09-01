@@ -9,10 +9,10 @@ from ZfsBackupTool.BackupPlan import BackupPlan
 from ZfsBackupTool.BackupPlan.Operations import make_next_backup_view, map_snapshots_to_data_sources
 from ZfsBackupTool.BackupSetup import BackupSetup
 from ZfsBackupTool.Config import TargetGroup, BackupSource
-from ZfsBackupTool.Constants import SNAPSHOT_PREFIX_POSTFIX_SEPARATOR, INITIAL_SNAPSHOT_POSTFIX, \
-    TARGET_STORAGE_SUBDIRECTORY, INITIALIZED_FILE_NAME
+from ZfsBackupTool.Constants import (SNAPSHOT_PREFIX_POSTFIX_SEPARATOR, INITIAL_SNAPSHOT_POSTFIX,
+                                     TARGET_STORAGE_SUBDIRECTORY, INITIALIZED_FILE_NAME)
 from ZfsBackupTool.ShellCommand import ShellCommand, SshHost
-from ZfsBackupTool.Zfs import scan_zfs_pools, PoolList, DataSet, ZfsResolveError
+from ZfsBackupTool.Zfs import scan_zfs_pools, PoolList, DataSet, ZfsResolveError, Pool
 
 
 # region setup helper class for environment expanding in config file
@@ -86,6 +86,9 @@ class ZfsBackupTool(object):
                                 help='Perform restore only for datasets starting with given filter.')
     restore_parser.add_argument('--force', action='store_true',
                                 help='Force restore, even if the target path is not empty.')
+    restore_parser.add_argument('-w', '--wipe', action='store_true',
+                                help='Wipe datasets, if they already contain snapshots and a restore of an initial '
+                                     'snapshot would fail.')
     verify_parser = subparsers.add_parser('verify', help='Verify datasets and their snapshots on targets.',
                                           description='Verify datasets and their snapshots on targets.')
     verify_parser.add_argument('-a', '--all', action='store_true',
@@ -341,7 +344,7 @@ class ZfsBackupTool(object):
             try:
                 dataset.get_snapshot_by_name(
                     self.config.snapshot_prefix + SNAPSHOT_PREFIX_POSTFIX_SEPARATOR + INITIAL_SNAPSHOT_POSTFIX)
-            except ValueError:
+            except ZfsResolveError:
                 print("No initial backup snapshot found for dataset {}".format(dataset.zfs_path))
                 print("Cannot proceed without intermediate backup snapshots")
                 print("Aborting...")
@@ -508,12 +511,41 @@ class ZfsBackupTool(object):
             print("Aborting due to existing intermediate snapshots on local side")
             return
 
+        repair_pools_with_intermediate_children = PoolList.merge(repair_pools, intermediate_children_of_repair_pools)
+
+        # we also have to check, if the target datasets already have snapshots, if we restore an initial snapshot
+        # if this is the case, we need to wipe the dataset before restoring the initial snapshot
+        # otherwise the restore would fail, because zfs recv -F only works on empty datasets
+        for dataset in repair_pools_with_intermediate_children.iter_datasets():
+            try:
+                dataset.get_snapshot_by_name(self.config.snapshot_prefix
+                                             + SNAPSHOT_PREFIX_POSTFIX_SEPARATOR
+                                             + INITIAL_SNAPSHOT_POSTFIX)
+            except ZfsResolveError:
+                # only problematic for initial snapshots
+                continue
+            already_existing_local_dataset = all_local_pools.get_dataset_by_path(dataset.zfs_path)
+            if already_existing_local_dataset.difference(dataset).has_snapshots():
+                if self.cli_args.force:
+                    cleanup_pool = Pool(already_existing_local_dataset.pool_name)
+                    cleanup_pool.add_dataset(already_existing_local_dataset)
+                    cleanup_pools = PoolList(cleanup_pool)
+
+                    print("Wiping dataset {} because it already has snapshots".format(dataset.zfs_path))
+                    cleanup_pool.print()
+                    self.backup_plan.clean_snapshots(cleanup_pools,
+                                                     zfs_path_filter=self.cli_args.filter)
+                else:
+                    # we need to wipe the dataset before restore
+                    print("Dataset {} already has snapshots, restore is not possible without wiping".format(
+                        dataset.zfs_path))
+                    print("Aborting...")
+                    sys.exit(1)
+
         # we now have a list of pools/datasets/snapshots that need to be repaired
         # we will now find out, where we can fetch the repair data from
         print("hard missing snapshots with intermediate children")
-        repair_pools_with_intermediate_children = PoolList.merge(repair_pools, intermediate_children_of_repair_pools)
         repair_pools_with_intermediate_children.print()
-
 
         # we only need the snapshot objects in the correct order and the host-target-path-mappings from where to fetch
         # the snapshot data from
@@ -525,12 +557,14 @@ class ZfsBackupTool(object):
         if self.cli_args.restore == '.':
             # inplace restore
             self.backup_plan.restore_snapshots(repair_snapshot_restore_source_mapping,
-                                               inplace=True)
+                                               inplace=True,
+                                               initial_wipe=self.cli_args.wipe)
         else:
             # restore to given path
             self.backup_plan.restore_snapshots(repair_snapshot_restore_source_mapping,
                                                restore_target=self.cli_args.restore,
-                                               inplace=False)
+                                               inplace=False,
+                                               initial_wipe=self.cli_args.wipe)
 
     def do_verify(self):
         # scan local zfs setup

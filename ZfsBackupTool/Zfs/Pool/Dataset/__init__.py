@@ -131,8 +131,8 @@ class DataSet(object):
         :raises ValueError: If the snapshot is not found in the dataset.
         """
         snapshot_zfs_path = self.resolve_snapshot_name(snapshot_name)
-        if not snapshot_zfs_path in self.snapshots:
-            raise ValueError("Snapshot '{}' not found in the dataset '{}'".format(snapshot_name, self.zfs_path))
+        if snapshot_zfs_path not in self.snapshots:
+            raise ZfsResolveError("Snapshot '{}' not found in the dataset '{}'".format(snapshot_name, self.zfs_path))
         return self.snapshots[snapshot_zfs_path]
 
     def print(self):
