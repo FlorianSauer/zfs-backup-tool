@@ -539,6 +539,7 @@ class ZfsBackupTool(object):
                     # we need to wipe the dataset before restore
                     print("Dataset {} already has snapshots, restore is not possible without wiping".format(
                         dataset.zfs_path))
+                    print("Use --force to wipe the dataset")
                     print("Aborting...")
                     sys.exit(1)
 

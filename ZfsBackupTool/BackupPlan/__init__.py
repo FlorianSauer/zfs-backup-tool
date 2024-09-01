@@ -455,12 +455,12 @@ class BackupPlan(object):
 
         for snapshot, sources in restore_snapshots:
             if inplace:
-                restore_target = snapshot.dataset_zfs_path
+                _restore_target = snapshot.dataset_zfs_path
             else:
                 assert restore_target
-                restore_target = os.path.join(restore_target, snapshot.dataset_zfs_path)
+                _restore_target = os.path.join(restore_target, snapshot.dataset_zfs_path)
             print("Restoring snapshot '{}' into '{}'".format(snapshot.zfs_path, restore_target))
-            self._restore_snapshot_from_target(sources, snapshot, restore_target, initial_wipe)
+            self._restore_snapshot_from_target(sources, snapshot, _restore_target, initial_wipe)
 
     def backup_snapshots(self, backup_pools: Dict[Tuple[Optional[SshHost], str], PoolList]):
         """
