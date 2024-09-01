@@ -471,6 +471,8 @@ class BackupPlan(object):
                             self.shell_command.delete_dataset(_restore_target)
                     else:
                         print("Cannot restore initial snapshots, if the dataset already has snapshots.")
+                        print("Wiping of all present snapshots of the target dataset is needed to restore initial "
+                              "backup snapshot.")
                         print("Aborting...")
                         sys.exit(1)
             print("Restoring snapshot '{}' into '{}'".format(snapshot.zfs_path, restore_target))
