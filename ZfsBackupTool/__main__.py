@@ -12,7 +12,7 @@ from ZfsBackupTool.Config import TargetGroup, BackupSource
 from ZfsBackupTool.Constants import (SNAPSHOT_PREFIX_POSTFIX_SEPARATOR, INITIAL_SNAPSHOT_POSTFIX,
                                      TARGET_STORAGE_SUBDIRECTORY, INITIALIZED_FILE_NAME)
 from ZfsBackupTool.ShellCommand import ShellCommand, SshHost
-from ZfsBackupTool.Zfs import scan_zfs_pools, PoolList, DataSet, ZfsResolveError, Pool
+from ZfsBackupTool.Zfs import scan_zfs_pools, PoolList, DataSet, ZfsResolveError
 
 
 # region setup helper class for environment expanding in config file
@@ -481,7 +481,8 @@ class ZfsBackupTool(object):
                 # resolve the dataset on the remote side which contains all snapshots from the first missing snapshot
                 # up to the latest snapshot
                 first_needed_snapshot = next(dataset.iter_snapshots())
-                fully_available_dataset = all_remote_configured_pools.get_dataset_by_path(dataset.zfs_path)
+                fully_available_dataset = all_remote_configured_pools.prefixed_view(
+                    restore_prefix).get_dataset_by_path(dataset.zfs_path)
                 try:
                     current_local_dataset = all_local_configured_pools.get_dataset_by_path(dataset.zfs_path)
                 except ZfsResolveError:
