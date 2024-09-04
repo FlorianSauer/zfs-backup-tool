@@ -1,13 +1,13 @@
 import os
 import sys
 from itertools import combinations
-from typing import Dict, Tuple, Optional, Set, List, cast
+from typing import Dict, Tuple, Optional, Set, List, cast, Mapping
 
 from ..Constants import (TARGET_STORAGE_SUBDIRECTORY, BACKUP_FILE_POSTFIX, EXPECTED_CHECKSUM_FILE_POSTFIX,
                          CALCULATED_CHECKSUM_FILE_POSTFIX, INITIAL_SNAPSHOT_POSTFIX, SNAPSHOT_PREFIX_POSTFIX_SEPARATOR)
 from ..ShellCommand import ShellCommand, SshHost
 from ..ShellCommand.Base import CommandExecutionError
-from ..Zfs import Snapshot, PoolList
+from ..Zfs import Snapshot, PoolList, DataSet
 
 
 class BackupPlan(object):
@@ -154,7 +154,7 @@ class BackupPlan(object):
         if not all(calculated_checksums.values()):
             # map the full file_path on target to the short target path
             uncalculated_paths = {tp: os.path.join(tp, TARGET_STORAGE_SUBDIRECTORY, snapshot.dataset_zfs_path,
-                                               snapshot.snapshot_name + BACKUP_FILE_POSTFIX)
+                                                   snapshot.snapshot_name + BACKUP_FILE_POSTFIX)
                                   for tp, cs in calculated_checksums.items()
                                   if not cs  # only recalculate if the checksum is missing
                                   and expected_checksums[tp]  # we need the expected checksum for verification
@@ -255,7 +255,7 @@ class BackupPlan(object):
             if missing_calculated_checksum:
                 print("Calculating missing checksums...")
                 backup_files = {tp: os.path.join(tp, TARGET_STORAGE_SUBDIRECTORY, snapshot.dataset_zfs_path,
-                                             snapshot.snapshot_name + BACKUP_FILE_POSTFIX)
+                                                 snapshot.snapshot_name + BACKUP_FILE_POSTFIX)
                                 for tp in missing_calculated_checksum.keys()}
                 if self.dry_run:
                     checksums = {tp: "dry-run" for tp in backup_files.keys()}
@@ -317,15 +317,16 @@ class BackupPlan(object):
         # verify the written backups
         print("Verifying written backups...")
         if self.dry_run:
-            read_checksums: Dict[str, Optional[str]] = {tp: "dry-run" for tp in target_paths}
+            read_checksums: Mapping[str, Optional[str]] = {tp: "dry-run" for tp in target_paths}
         else:
             backup_files = {tp: os.path.join(tp, TARGET_STORAGE_SUBDIRECTORY, snapshot.dataset_zfs_path,
-                                         snapshot.snapshot_name + BACKUP_FILE_POSTFIX)
+                                             snapshot.snapshot_name + BACKUP_FILE_POSTFIX)
                             for tp in target_paths}
             read_checksums = self.shell_command.target_get_checksums(backup_files)
 
         invalid_checksums = self._checksum_verify_helper(list(target_paths), snapshot,
-                                                         {tp: expected_checksum for tp in target_paths}, read_checksums)
+                                                         {tp: expected_checksum for tp in target_paths},
+                                                         dict(read_checksums))
 
         if invalid_checksums:
             print("Aborting...")
@@ -334,25 +335,20 @@ class BackupPlan(object):
     def _restore_snapshot_from_target(self, host_target_paths: List[Tuple[Optional[SshHost], str]],
                                       snapshot: Snapshot,
                                       restore_zfs_path: str,
-                                      initial_wipe: bool = False):
+                                      replace_parent_move_children: bool = False,
+                                      wipe_replacement: bool = False):
         for i, (host, target_path) in enumerate(sorted(host_target_paths, key=lambda x: x[1])):
             self.shell_command.set_remote_host(host)
 
             print("Restoring backup snapshot {} from target {}...".format(
                 snapshot.zfs_path, target_path))
-            if snapshot.snapshot_name.endswith(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR+INITIAL_SNAPSHOT_POSTFIX):
-                if (self.shell_command.has_dataset(restore_zfs_path)
-                        and self.shell_command.list_snapshots(restore_zfs_path)):
-                    print("Dataset {} already has snapshots.".format(restore_zfs_path))
-                    if initial_wipe:
-                        print("Wiping dataset {}...".format(restore_zfs_path))
-                        if self.dry_run:
-                            print("Would have wiped dataset {}...".format(restore_zfs_path))
-                        else:
-                            self.shell_command.delete_dataset(restore_zfs_path)
-                    else:
+            if snapshot.snapshot_name.endswith(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR + INITIAL_SNAPSHOT_POSTFIX):
+                if self.shell_command.has_dataset(restore_zfs_path):
+                    if not replace_parent_move_children:
+                        print("Dataset {} already has snapshots.".format(restore_zfs_path))
                         print("Cannot restore initial snapshots, if the dataset already has snapshots.")
-
+                        print("Wiping of all present snapshots of the target dataset is needed to restore initial "
+                              "backup snapshot.")
                         print("Aborting...")
                         sys.exit(1)
             if self.dry_run:
@@ -360,10 +356,12 @@ class BackupPlan(object):
                     snapshot.zfs_path, target_path))
             else:
                 try:
-                    self.shell_command.zfs_recv_snapshot_from_target(target_path, snapshot.zfs_path, restore_zfs_path)
+                    self.shell_command.zfs_recv_snapshot_from_target(target_path, snapshot.zfs_path, restore_zfs_path,
+                                                                     replace_parent_move_children, wipe_replacement)
                 except CommandExecutionError as e:
                     print(
-                        "Error restoring {} under {} from {}: {}".format(snapshot.zfs_path, restore_zfs_path, target_path, e))
+                        "Error restoring {} under {} from {}: {}".format(snapshot.zfs_path, restore_zfs_path,
+                                                                         target_path, e))
                     if i + 1 < len(host_target_paths):
                         print("Trying next target...")
                         continue
@@ -448,11 +446,14 @@ class BackupPlan(object):
             print()
 
     def restore_snapshots(self, restore_snapshots: List[Tuple[Snapshot, List[Tuple[Optional[SshHost], str]]]],
-                          restore_target: Optional[str] = None, inplace: bool = False, initial_wipe:bool=False):
+                          replace_dataset: Optional[List[DataSet]] = None,
+                          restore_target: Optional[str] = None, inplace: bool = False, wipe_replacement: bool = False):
         if not inplace and restore_target is None:
             raise ValueError("Restore target must be specified if not restoring inplace.")
         if restore_target:
             assert not restore_target.startswith('/')
+
+        replace_dataset_names = {dataset.zfs_path for dataset in replace_dataset} if replace_dataset else set()
 
         for snapshot, sources in restore_snapshots:
             if inplace:
@@ -460,27 +461,22 @@ class BackupPlan(object):
             else:
                 assert restore_target
                 _restore_target = os.path.join(restore_target, snapshot.dataset_zfs_path)
-            if snapshot.snapshot_name.endswith(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR + INITIAL_SNAPSHOT_POSTFIX):
-                if self.shell_command.has_dataset(_restore_target) and self.shell_command.list_snapshots(_restore_target):
-                    print("Dataset {} already has snapshots.".format(_restore_target))
-                    if initial_wipe:
-                        print("Wiping dataset {}...".format(_restore_target))
-                        if self.dry_run:
-                            print("Would have wiped dataset {}...".format(_restore_target))
-                        else:
-                            # why is wiping needed?
-                            # A: restoring an initial snapshot into an already existing dataset is possible.
-                            #    However, if the initial snapshot is encrypted, the dataset must be deleted before,
-                            #    otherwise the encryption would be stripped away.
-                            self.shell_command.delete_dataset(_restore_target)
-                    else:
-                        print("Cannot restore initial snapshots, if the dataset already has snapshots.")
-                        print("Wiping of all present snapshots of the target dataset is needed to restore initial "
-                              "backup snapshot.")
-                        print("Aborting...")
-                        sys.exit(1)
-            print("Restoring snapshot '{}' into '{}'".format(snapshot.zfs_path, _restore_target))
-            self._restore_snapshot_from_target(sources, snapshot, _restore_target, initial_wipe)
+            if snapshot.dataset_zfs_path in replace_dataset_names and snapshot.snapshot_name.endswith(
+                    SNAPSHOT_PREFIX_POSTFIX_SEPARATOR + INITIAL_SNAPSHOT_POSTFIX):
+                if wipe_replacement:
+                    print("Replacing and wiping dataset '{}' after restore of snapshot '{}'".format(
+                        snapshot.dataset_zfs_path, snapshot.zfs_path))
+                else:
+                    print("Replacing dataset '{}' after restore of snapshot '{}'".format(
+                        snapshot.dataset_zfs_path, snapshot.zfs_path))
+                self._restore_snapshot_from_target(sources, snapshot, _restore_target,
+                                                   replace_parent_move_children=True,
+                                                   wipe_replacement=wipe_replacement)
+            else:
+                print("Restoring snapshot '{}' into '{}'".format(snapshot.zfs_path, _restore_target))
+                self._restore_snapshot_from_target(sources, snapshot, _restore_target,
+                                                   replace_parent_move_children=False,
+                                                   wipe_replacement=False)
 
     def backup_snapshots(self, backup_pools: Dict[Tuple[Optional[SshHost], str], PoolList]):
         """
@@ -532,3 +528,10 @@ class BackupPlan(object):
                     print("Would have removed files: ", snapshot_files)
                 else:
                     self.shell_command.target_remove_files(snapshot_files)
+
+    def wipe_dataset(self, dataset: DataSet):
+        if self.dry_run:
+            print("Would have deleted dataset: ", dataset.zfs_path)
+        else:
+            print("Deleting dataset: ", dataset.zfs_path)
+            self.shell_command.delete_dataset(dataset.zfs_path, with_snapshots=True)

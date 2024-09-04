@@ -20,12 +20,18 @@ class ZfsCommands(BaseShellCommand):
         stdout_lines = sub_process.stdout.read().decode('utf-8').splitlines() if sub_process.stdout else []
         return [line.strip() for line in stdout_lines]
 
-    def list_datasets(self, pool: str) -> List[str]:
+    def list_datasets(self, zfs_parts_prefix: str) -> List[str]:
+        """
+        List all datasets under the given zfs_parts_prefix
+        The zfs_parts_prefix must be a full valid zfs path to a pool or dataset.
+        The returned datasets are relative to the zfs_parts_prefix and can be joined with the given zfs_parts_prefix
+        to get full zfs paths.
+        """
         command = "zfs list -H -r -o name"
-        command += ' "{}"'.format(pool)
+        command += ' "{}"'.format(zfs_parts_prefix)
         sub_process = self._execute(command, capture_output=True)
         stdout_lines = sub_process.stdout.read().decode('utf-8').splitlines() if sub_process.stdout else []
-        datasets = [line.strip().replace(pool + '/', '', 1) for line in stdout_lines if line.strip() != pool]
+        datasets = [line.strip().replace(zfs_parts_prefix + '/', '', 1) for line in stdout_lines if line.strip() != zfs_parts_prefix]
         return datasets
 
     def list_snapshots(self, dataset: str) -> List[str]:
@@ -93,8 +99,11 @@ class ZfsCommands(BaseShellCommand):
         command = 'zfs create "{}"'.format(source_dataset)
         return self._execute(command, capture_output=False)
 
-    def delete_dataset(self, dataset_zfs_path: str):
-        command = 'zfs destroy -r "{}"'.format(dataset_zfs_path)
+    def delete_dataset(self, dataset_zfs_path: str, with_snapshots: bool = False):
+        if with_snapshots:
+            command = 'zfs destroy -r "{}"'.format(dataset_zfs_path)
+        else:
+            command = 'zfs destroy "{}"'.format(dataset_zfs_path)
         return self._execute(command, capture_output=False)
 
     def delete_snapshot(self, snapshot_zfs_path: str):
@@ -144,7 +153,9 @@ class ZfsCommands(BaseShellCommand):
 
     def zfs_recv_snapshot_from_target(self, restore_source_dirpath: str,
                                       restore_source_zfs_path: str,
-                                      restore_target_zfs_path: str) -> None:
+                                      restore_target_zfs_path: str,
+                                      replace_parent_move_children=False,
+                                      wipe_replacement=False) -> None:
         # we iter the second to second last part of the restore_zfs_path to create the datasets, excluding
         # the pool and the target dataset are skipped
         # pool creation is a too big hassle, maybe do this at a later point
@@ -181,6 +192,15 @@ class ZfsCommands(BaseShellCommand):
         # the last dataset segment is created by zfs recv
         # endregion
 
+        # region children renaming
+
+        if replace_parent_move_children:
+            effective_restore_target_zfs_path = restore_target_zfs_path + '.replacement'
+        else:
+            effective_restore_target_zfs_path = restore_target_zfs_path
+
+        # endregion
+
         # region read the backup file and forward it to zfs recv
         restore_pool_dataset_zfs_path, restore_snapshot = restore_source_zfs_path.split('@', 1)
         restore_file_path = os.path.join(restore_source_dirpath, TARGET_STORAGE_SUBDIRECTORY,
@@ -193,7 +213,38 @@ class ZfsCommands(BaseShellCommand):
                 'pv {} "{}"'.format(self._PV_DEFAULT_OPTIONS, restore_file_path))
         else:
             command = 'pv {} "{}"'.format(self._PV_DEFAULT_OPTIONS, restore_file_path)
-        command += ' | zfs recv -F "{}"'.format(restore_target_zfs_path)
+        command += ' | zfs recv -F "{}"'.format(effective_restore_target_zfs_path)
 
-        self._execute(command, capture_output=False)
+        try:
+            self._execute(command, capture_output=False)
+        except Exception:
+            if replace_parent_move_children:
+                # cleanup
+                self.delete_dataset(effective_restore_target_zfs_path, with_snapshots=True)
+            raise
+        if replace_parent_move_children:
+            # move any children of an existing
+            if self.has_dataset(restore_target_zfs_path):
+                # list_datasets will include all children, even sub-children
+                # we have to filter out the sub-children, which contain an additional slash
+                children = [restore_target_zfs_path+'/'+dataset
+                            for dataset in self.list_datasets(restore_target_zfs_path)
+                            if '/' not in dataset]
+
+                print("Moving children: ", children)
+
+                for child in children:
+                    self._execute('zfs rename "{}" "{}"'.format(child,
+                                                                child.replace(restore_target_zfs_path,
+                                                                              effective_restore_target_zfs_path, 1)),
+                                  capture_output=False)
+                self._execute('zfs rename "{}" "{}"'.format(restore_target_zfs_path,
+                                                            restore_target_zfs_path + '.replaced'),
+                              capture_output=False)
+                self._execute('zfs rename "{}" "{}"'.format(effective_restore_target_zfs_path, restore_target_zfs_path),
+                              capture_output=False)
+                if wipe_replacement:
+                    self.delete_dataset(restore_target_zfs_path, with_snapshots=True)
+            else:
+                print("No children to move")
         # endregion

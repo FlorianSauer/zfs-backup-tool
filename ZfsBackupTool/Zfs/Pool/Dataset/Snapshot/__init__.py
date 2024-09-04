@@ -57,8 +57,8 @@ class Snapshot(object):
         """
         return self.prefixed_view('')
 
-    def print(self):
-        if self.has_incremental_base():
+    def print(self, with_incremental_base: bool = True):
+        if self.has_incremental_base() and with_incremental_base:
             print("    Snapshot: {} ({}) -> {}".format(self.snapshot_name, self.zfs_path,
                                                        self._incremental_base.snapshot_name))
         else:

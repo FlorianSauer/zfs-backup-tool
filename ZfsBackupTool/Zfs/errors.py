@@ -8,3 +8,7 @@ class ZfsDeshiftError(Exception):
 
 class ZfsAddError(Exception):
     pass
+
+
+class ZfsParseError(Exception):
+    pass

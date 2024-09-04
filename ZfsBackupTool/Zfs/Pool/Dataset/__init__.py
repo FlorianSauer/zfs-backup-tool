@@ -2,7 +2,7 @@ from typing import Dict, Iterator, List, Iterable, Optional
 
 from ZfsBackupTool.Constants import SNAPSHOT_PREFIX_POSTFIX_SEPARATOR, INITIAL_SNAPSHOT_POSTFIX
 from .Snapshot import Snapshot
-from ...errors import ZfsResolveError, ZfsAddError
+from ...errors import ZfsResolveError, ZfsAddError, ZfsParseError
 
 
 class DataSet(object):
@@ -151,10 +151,10 @@ class DataSet(object):
             raise ZfsResolveError("Snapshot '{}' not found in the dataset '{}'".format(snapshot_name, self.zfs_path))
         return self.snapshots[snapshot_zfs_path]
 
-    def print(self):
+    def print(self, with_incremental_base: bool = True):
         print("  Dataset: {} ({})".format(self.dataset_name, self.zfs_path))
         for snapshot in self:
-            snapshot.print()
+            snapshot.print(with_incremental_base)
 
     @classmethod
     def merge(cls, pool_name: str, *others: 'DataSet'):
@@ -182,6 +182,26 @@ class DataSet(object):
             new_merged_dataset.add_snapshot(new_merged_snapshot)
 
         return new_merged_dataset
+
+    @classmethod
+    def parse_backup_snapshot(cls, snapshot_name: str):
+        """
+        Parse a backup snapshot name into its components.
+
+        Args:
+            snapshot_name (str): The snapshot name to parse.
+
+        Returns:
+            Tuple[str, int]: A tuple containing the snapshot prefix and the snapshot sequence number.
+        """
+        if SNAPSHOT_PREFIX_POSTFIX_SEPARATOR not in snapshot_name:
+            raise ZfsParseError("Invalid snapshot name: {}".format(snapshot_name))
+        snapshot_prefix, snapshot_number = snapshot_name.rsplit(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR, 1)
+        if snapshot_number == INITIAL_SNAPSHOT_POSTFIX:
+            return snapshot_prefix, 0
+        if not snapshot_number.isnumeric():
+            raise ZfsParseError("Invalid snapshot number in snapshot name: {}".format(snapshot_name))
+        return snapshot_prefix, int(snapshot_number)
 
     @classmethod
     def sort_snapshots(cls, snapshots: Iterable[Snapshot]) -> List[Snapshot]:
@@ -302,4 +322,24 @@ class DataSet(object):
                 snapshot_view = snapshot.view()
                 new_dataset.add_snapshot(snapshot_view)
 
+        return new_dataset
+
+    def filter_previous_snapshots(self, snapshot_prefix, snapshot: Snapshot) -> 'DataSet':
+        """
+        Filter out all snapshots that are older than the given snapshot.
+        """
+        if not snapshot.dataset_zfs_path == self.zfs_path:
+            raise ValueError("Snapshot does not belong to this dataset")
+        new_dataset = self.view()
+        filter_snapshot_prefix, filter_snapshot_index = self.parse_backup_snapshot(snapshot.snapshot_name)
+        for snapshot in list(new_dataset.iter_snapshots()):
+            try:
+                snapshot_prefix, snapshot_index = self.parse_backup_snapshot(snapshot.snapshot_name)
+            except ZfsParseError:
+                # ignore snapshots that are not in the correct format
+                continue
+            if snapshot_prefix != filter_snapshot_prefix:
+                continue
+            if snapshot_index < filter_snapshot_index:
+                new_dataset.remove_snapshot(snapshot)
         return new_dataset

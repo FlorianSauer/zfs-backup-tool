@@ -93,7 +93,7 @@ class PoolList(object):
 
     def remove_pool(self, pool: Pool):
         if pool.pool_name not in self.pools:
-            raise ValueError("Pool '{}' not found in the pool list".format(pool.pool_name))
+            raise ZfsResolveError("Pool '{}' not found in the pool list".format(pool.pool_name))
         self.pools.pop(pool.pool_name)
 
     def add_dataset(self, dataset: DataSet):
@@ -104,6 +104,12 @@ class PoolList(object):
         else:
             pool = self.pools[poolname]
         pool.add_dataset(dataset)
+
+    def remove_dataset(self, dataset: DataSet):
+        if dataset.pool_name not in self.pools:
+            raise ZfsResolveError("Pool '{}' not found in the pool list".format(dataset.pool_name))
+        pool = self.pools[dataset.pool_name]
+        pool.remove_dataset(dataset)
 
     def iter_pools(self) -> Iterable[Pool]:
         for pool in self:
@@ -131,9 +137,9 @@ class PoolList(object):
             return self.pools[pool_name].resolve_zfs_path(zfs_path)
         raise ZfsResolveError("Pool '{}' not found in the pool list".format(pool_name))
 
-    def print(self):
+    def print(self, with_incremental_base: bool = True):
         for pool in self:
-            pool.print()
+            pool.print(with_incremental_base)
 
     @classmethod
     def merge(cls, *others: 'PoolList') -> 'PoolList':

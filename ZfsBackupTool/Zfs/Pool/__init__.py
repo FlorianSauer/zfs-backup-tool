@@ -114,10 +114,10 @@ class Pool(object):
     def get_dataset_by_name(self, dataset_name: str) -> DataSet:
         return self.datasets[self.resolve_dataset_name(dataset_name)]
 
-    def print(self):
+    def print(self, with_incremental_base: bool = True):
         print("Pool: {}".format(self.pool_name))
         for dataset in self:
-            dataset.print()
+            dataset.print(with_incremental_base)
 
     @classmethod
     def merge(cls, *others: 'Pool'):
