@@ -118,9 +118,9 @@ class BaseShellCommand(object):
     def _get_ssh_command(cls, remote: SshHost):
         command = "ssh -o BatchMode=yes "
         if remote.key_path:
-            command += '-i "{}"'.format(remote.key_path)
+            command += '-i "{}" '.format(remote.key_path)
         if remote.port:
-            command += "-p {}".format(remote.port)
+            command += "-p {} ".format(remote.port)
         if remote.user:
             command += "{}@{} ".format(remote.user, remote.host)
         else:
