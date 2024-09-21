@@ -72,9 +72,13 @@ class BackupGroupPlanner(object):
             elif dataset.endswith("/"):
                 dataset = dataset[:-1]
                 try:
-                    source_datasets.append(available_pools.get_dataset_by_path(dataset))
+                    _dataset = available_pools.get_dataset_by_path(dataset)
                 except ZfsResolveError:
                     print("Dataset '{}' not found".format(dataset))
+                    continue
+                single_dataset_poollist = PoolList()
+                single_dataset_poollist.add_dataset(_dataset)
+                source_datasets.append(single_dataset_poollist)
             else:
                 source_datasets.append(available_pools.filter_include_by_zfs_path_prefix(dataset))
 
