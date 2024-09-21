@@ -103,7 +103,8 @@ class BackupGroupPlanner(object):
         for disk_priority_index, label in enumerate(disk_priorities):
             disk_size = disk_sizes_with_labels[label]
             disk_is_smallest_disk = disk_size == min(disk_sizes_with_labels.values())
-            disk_is_not_smallest_and_last_disk = not (disk_is_smallest_disk and disk_priority_index == len(disk_priorities) - 1)
+            disk_is_not_smallest_and_last_disk = not (
+                        disk_is_smallest_disk and disk_priority_index == len(disk_priorities) - 1)
             print("=========================================")
             print("Disk:", label)
             usage_size = 0
@@ -183,7 +184,7 @@ class BackupGroupPlanner(object):
         if datasets.has_snapshots():
             print("Remaining datasets:")
             for dataset in sorted(datasets.iter_datasets(), key=lambda x: x.zfs_path):
-                print(f"  {dataset.zfs_path}")
+                print("  {}: {} ({})".format(dataset.zfs_path, dataset.dataset_size, format_size(dataset.dataset_size)))
 
 
 if __name__ == "__main__":
