@@ -148,7 +148,9 @@ class FsCommands(BaseShellCommand):
                 pv_name,
                 file_path)
             checksum_command += ' | sha256sum -b > "{}"'.format(
-                file_path + CALCULATED_CHECKSUM_FILE_POSTFIX)
+                file_path + CALCULATED_CHECKSUM_FILE_POSTFIX + ".tmp")
+            checksum_command += ' && mv "{}" "{}"'.format(file_path + CALCULATED_CHECKSUM_FILE_POSTFIX + ".tmp",
+                                                          file_path + CALCULATED_CHECKSUM_FILE_POSTFIX)
             command += shlex.quote(checksum_command)
         else:
             command = 'pv {} --name "{}" --cursor "{}"'.format(
@@ -156,7 +158,9 @@ class FsCommands(BaseShellCommand):
                 pv_name,
                 file_path)
             command += ' | sha256sum -b > "{}"'.format(
-                file_path + CALCULATED_CHECKSUM_FILE_POSTFIX)
+                file_path + CALCULATED_CHECKSUM_FILE_POSTFIX + ".tmp")
+            command += ' && mv "{}" "{}"'.format(file_path + CALCULATED_CHECKSUM_FILE_POSTFIX + ".tmp",
+                                                 file_path + CALCULATED_CHECKSUM_FILE_POSTFIX)
 
         sub_process = self._execute(command, capture_output=True, capture_stdout=False, capture_stderr=True,
                                     no_wait=True)
