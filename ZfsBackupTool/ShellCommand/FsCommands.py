@@ -147,22 +147,16 @@ class FsCommands(BaseShellCommand):
                 self._PV_DEFAULT_OPTIONS,
                 pv_name,
                 file_path)
-            checksum_command += ' | sha256sum -b > "{}"'.format(
-                file_path + CALCULATED_CHECKSUM_FILE_POSTFIX + ".tmp")
-            checksum_command += ' && mv "{}" "{}"'.format(file_path + CALCULATED_CHECKSUM_FILE_POSTFIX + ".tmp",
-                                                          file_path + CALCULATED_CHECKSUM_FILE_POSTFIX)
+            checksum_command += ' | sha256sum -b'
             command += shlex.quote(checksum_command)
         else:
             command = 'pv {} --name "{}" --cursor "{}"'.format(
                 self._PV_DEFAULT_OPTIONS,
                 pv_name,
                 file_path)
-            command += ' | sha256sum -b > "{}"'.format(
-                file_path + CALCULATED_CHECKSUM_FILE_POSTFIX + ".tmp")
-            command += ' && mv "{}" "{}"'.format(file_path + CALCULATED_CHECKSUM_FILE_POSTFIX + ".tmp",
-                                                 file_path + CALCULATED_CHECKSUM_FILE_POSTFIX)
+            command += ' | sha256sum -b'
 
-        sub_process = self._execute(command, capture_output=True, capture_stdout=False, capture_stderr=True,
+        sub_process = self._execute(command, capture_output=True, capture_stdout=True, capture_stderr=True,
                                     no_wait=True)
 
         return sub_process, command
@@ -223,9 +217,9 @@ class FsCommands(BaseShellCommand):
             stderr_printer.join()
             if pv_process.returncode != 0:
                 raise CommandExecutionError(pv_process, "Error executing command > {} <".format(str(pv_process.args)))
-
-            checksum_file = file_paths[pv_name] + CALCULATED_CHECKSUM_FILE_POSTFIX
-            checksum = self.target_read_checksum_from_file(checksum_file)
+            pv_process_stdout = pv_process.stdout.read().decode('utf-8').strip()
+            # parse checksum from stdout
+            checksum = pv_process_stdout.split(' ')[0]
             output_dict[pv_name] = checksum
 
         return output_dict

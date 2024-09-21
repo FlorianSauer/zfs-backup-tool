@@ -174,6 +174,14 @@ class BackupPlan(object):
                 re_calculated_checksums = {tp: "dry-run" for tp in uncalculated_paths.keys()}
             else:
                 re_calculated_checksums = self.shell_command.target_get_checksums(uncalculated_paths)
+                # write the calculated checksum to the calculated checksum file
+                for target_path, calculated_checksum in re_calculated_checksums.items():
+                    calculated_checksum_file_path = os.path.join(
+                        target_path, TARGET_STORAGE_SUBDIRECTORY, snapshot.dataset_zfs_path,
+                        snapshot.snapshot_name + BACKUP_FILE_POSTFIX + CALCULATED_CHECKSUM_FILE_POSTFIX)
+                    self.shell_command.target_write_to_file(
+                        calculated_checksum_file_path,
+                        "{} ./{}".format(calculated_checksum, snapshot.snapshot_name + BACKUP_FILE_POSTFIX))
             for target_path, calculated_checksum in re_calculated_checksums.items():
                 if calculated_checksums[target_path]:
                     raise RuntimeError("Calculated checksum already exists for backup {}@{} on target {}".format(
@@ -268,6 +276,13 @@ class BackupPlan(object):
                     checksums = {tp: "dry-run" for tp in backup_files.keys()}
                 else:
                     checksums = self.shell_command.target_get_checksums(backup_files)
+                    for target_path, checksum in checksums.items():
+                        calculated_checksum_file_path = os.path.join(
+                            target_path, TARGET_STORAGE_SUBDIRECTORY, snapshot.dataset_zfs_path,
+                            snapshot.snapshot_name + BACKUP_FILE_POSTFIX + CALCULATED_CHECKSUM_FILE_POSTFIX)
+                        self.shell_command.target_write_to_file(
+                            calculated_checksum_file_path,
+                            "{} ./{}".format(checksum, snapshot.snapshot_name + BACKUP_FILE_POSTFIX))
                 invalid_checksums = self._checksum_verify_helper(list(missing_calculated_checksum.keys()), snapshot,
                                                                  missing_calculated_checksum,
                                                                  cast(Dict[str, Optional[str]], checksums))
@@ -330,6 +345,13 @@ class BackupPlan(object):
                                              snapshot.snapshot_name + BACKUP_FILE_POSTFIX)
                             for tp in target_paths}
             read_checksums = self.shell_command.target_get_checksums(backup_files)
+            for target_path, checksum in read_checksums.items():
+                calculated_checksum_file_path = os.path.join(
+                    target_path, TARGET_STORAGE_SUBDIRECTORY, snapshot.dataset_zfs_path,
+                    snapshot.snapshot_name + BACKUP_FILE_POSTFIX + CALCULATED_CHECKSUM_FILE_POSTFIX)
+                self.shell_command.target_write_to_file(
+                    calculated_checksum_file_path,
+                    "{} ./{}".format(checksum, snapshot.snapshot_name + BACKUP_FILE_POSTFIX))
 
         invalid_checksums = self._checksum_verify_helper(list(target_paths), snapshot,
                                                          {tp: expected_checksum for tp in target_paths},
