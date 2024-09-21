@@ -34,7 +34,8 @@ class BackupGroupPlanner(object):
 
     # add positional argument to specify multiple source datasets
     cli_parser.add_argument("source_datasets", nargs="+",
-                            help="Source datasets to plan backup groups for.")
+                            help="Source datasets to plan backup groups for. Given strings are used as prefixes. "
+                                 "To select a single dataset, use a trailing '/'.")
 
     def __init__(self):
         self.cli_args: argparse.Namespace = None  # type: ignore
