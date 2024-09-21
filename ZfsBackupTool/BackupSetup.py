@@ -75,6 +75,15 @@ class BackupSetup(object):
 
         return source_pool_view_mapping
 
+    def filter_by_prefix(self, pools: PoolList) -> PoolList:
+        pools_view = pools.view()
+        for dataset in pools_view.iter_datasets():
+            for snapshot in dataset:
+                if not snapshot.snapshot_name.startswith(
+                        self.snapshot_prefix + SNAPSHOT_PREFIX_POSTFIX_SEPARATOR):
+                    dataset.remove_snapshot(snapshot)
+        return pools_view
+
     def gather_target_pools(self, shell_command: ShellCommand, include_all: bool = False
                             ) -> Dict[Tuple[Optional[SshHost], str], PoolList]:
         """

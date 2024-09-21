@@ -1,4 +1,6 @@
 import random
+import time
+from datetime import datetime
 from typing import Union
 
 from ZfsBackupTool.Zfs import DataSet, Snapshot, Pool, PoolList
@@ -7,7 +9,10 @@ from ZfsBackupTool.Zfs import DataSet, Snapshot, Pool, PoolList
 def make_dataset(pool_name: str, dataset_name: str, snapshot_count: int) -> DataSet:
     dataset = DataSet(pool_name, dataset_name)
     for i in range(snapshot_count):
-        dataset.add_snapshot(Snapshot(pool_name, dataset_name, "snapshot_{}".format(i)))
+        time.sleep(0.01)  # to avoid same creation time
+        snapshot = Snapshot(pool_name, dataset_name, "snapshot_{}".format(i))
+        snapshot.set_creation_time(datetime.now())
+        dataset.add_snapshot(snapshot)
     return dataset
 
 

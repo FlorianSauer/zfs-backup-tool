@@ -119,7 +119,7 @@ class FsCommands(BaseShellCommand):
         content = sub_process.stdout.read().decode('utf-8').strip().split(' ')[0]
         return content
 
-    def program_is_installed(self, program: str) -> bool:
+    def program_is_installed(self, program: str, verbose=False) -> bool:
         # fall back to default set remote host
         if self.remote:
             command = self._get_ssh_command(self.remote)
@@ -128,14 +128,16 @@ class FsCommands(BaseShellCommand):
             command = 'which "{}"'.format(program)
 
         try:
-            self._execute(command, capture_output=True)
+            sub_process = self._execute(command, capture_output=True)
         except CommandExecutionError as e:
-            print("Program '{}' not installed".format(program))
+            print("Program '{}' not installed".format(program), file=sys.stderr)
             stderr_data = e.sub_process.stderr.read().decode('utf-8') if e.sub_process.stderr else ""
             print(stderr_data, file=sys.stderr)
             sys.exit(1)
         else:
-            print("Program '{}' is installed".format(program))
+            if verbose:
+                print("Program '{}' is installed: {}".format(program,
+                                                             sub_process.stdout.read().decode('utf-8').strip()))
             return True
 
     def _target_get_checksum(self, file_path: str, pv_name: str) -> Tuple[Popen, str]:

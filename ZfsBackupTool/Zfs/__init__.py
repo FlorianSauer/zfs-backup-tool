@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import List, Dict, Iterable, Union, Iterator
+from typing import List, Dict, Iterable, Union, Iterator, Optional
 
 from ZfsBackupTool.ShellCommand import ShellCommand
 from .Pool import Pool
@@ -10,7 +10,8 @@ from .errors import ZfsResolveError, ZfsDeshiftError, ZfsAddError
 
 __all__ = [
     'scan_zfs_pools', 'scan_filebased_zfs_pools',
-    'PoolList', 'Pool', 'DataSet', 'Snapshot']
+    'PoolList', 'Pool', 'DataSet', 'Snapshot',
+    'ZfsResolveError', 'ZfsDeshiftError', 'ZfsAddError']
 
 from ..Constants import (BACKUP_FILE_POSTFIX, EXPECTED_CHECKSUM_FILE_POSTFIX, CALCULATED_CHECKSUM_FILE_POSTFIX)
 
@@ -191,8 +192,9 @@ class PoolList(object):
                 diff_poollist.add_pool(our_pool.view())
         full_diffs = set(self.pools.keys()).difference(set(other_pools.keys()))
         for full_diff in full_diffs:
-            assert full_diff not in diff_poollist.pools
-            diff_poollist.add_pool(self.pools[full_diff].view())
+            assert full_diff in diff_poollist.pools
+            if full_diff not in diff_poollist.pools:
+                diff_poollist.add_pool(self.pools[full_diff].view())
         return diff_poollist
 
     def intersection(self, *other_pool_lists: 'PoolList') -> 'PoolList':
@@ -266,7 +268,7 @@ class PoolList(object):
         for pool in self.pools.values():
             pool.drop_empty_datasets()
 
-    def filter_include_by_zfs_path_prefix(self, zfs_path_prefix: str) -> "PoolList":
+    def filter_include_by_zfs_path_prefix(self, zfs_path_prefix: Optional[str]) -> "PoolList":
         """
         Filter out all elements in the pool, which do not match the given zfs path prefix.
         """
@@ -299,11 +301,14 @@ def scan_zfs_pools(shell_command: ShellCommand, include_dataset_sizes=False) -> 
                 dataset.dataset_size = shell_command.get_dataset_size(dataset.zfs_path, recursive=False)
             pool.add_dataset(dataset)
 
-            dataset_snapshot_names = shell_command.list_snapshots(dataset.zfs_path)
-            logger.debug("Found snapshots for dataset {}: {}".format(dataset.zfs_path, dataset_snapshot_names))
+            dataset_snapshot_names_creation_times = shell_command.list_snapshots_with_creation_time(dataset.zfs_path)
+            logger.debug("Found snapshots for dataset {}: {}".format(
+                dataset.zfs_path,
+                [snapshot_name for snapshot_name, _ in dataset_snapshot_names_creation_times]))
 
-            for snapshot_name in dataset_snapshot_names:
+            for snapshot_name, creation_time in dataset_snapshot_names_creation_times:
                 snapshot = Snapshot(pool.pool_name, dataset.dataset_name, snapshot_name)
+                snapshot.set_creation_time(creation_time)
                 dataset.add_snapshot(snapshot)
 
     return PoolList(*pools)

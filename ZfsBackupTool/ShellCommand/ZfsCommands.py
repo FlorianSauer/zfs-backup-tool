@@ -2,11 +2,17 @@ import os
 import shlex
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Tuple
 
 from .Base import BaseShellCommand, CommandExecutionError
-from ..Constants import TARGET_STORAGE_SUBDIRECTORY, BACKUP_FILE_POSTFIX
+from ..Constants import (TARGET_STORAGE_SUBDIRECTORY, BACKUP_FILE_POSTFIX, TARGET_DATASET_REPLACEMENT_POSTFIX,
+                         REPLACED_ORIGINAL_DATASET_POSTFIX)
+
+
+class ZfsCommandsError(Exception):
+    pass
 
 
 class ZfsCommands(BaseShellCommand):
@@ -31,7 +37,8 @@ class ZfsCommands(BaseShellCommand):
         command += ' "{}"'.format(zfs_parts_prefix)
         sub_process = self._execute(command, capture_output=True)
         stdout_lines = sub_process.stdout.read().decode('utf-8').splitlines() if sub_process.stdout else []
-        datasets = [line.strip().replace(zfs_parts_prefix + '/', '', 1) for line in stdout_lines if line.strip() != zfs_parts_prefix]
+        datasets = [line.strip().replace(zfs_parts_prefix + '/', '', 1) for line in stdout_lines if
+                    line.strip() != zfs_parts_prefix]
         return datasets
 
     def list_snapshots(self, dataset: str) -> List[str]:
@@ -42,9 +49,18 @@ class ZfsCommands(BaseShellCommand):
         return [line.strip().replace(dataset + '@', '')
                 for line in stdout_lines]
 
+    def list_snapshots_with_creation_time(self, dataset: str) -> List[Tuple[str, datetime]]:
+        command = "zfs list -H -p -o name,creation -t snapshot"
+        command += ' "{}"'.format(dataset)
+        sub_process = self._execute(command, capture_output=True)
+        stdout_lines = sub_process.stdout.read().decode('utf-8').splitlines() if sub_process.stdout else []
+        return [(line.strip().split()[0].replace(dataset + '@', ''),
+                 datetime.fromtimestamp(int(line.strip().split()[1])))
+                for line in stdout_lines]
+
     def has_dataset(self, dataset: str) -> bool:
         command = "zfs list -H -o name"
-        command += ' | grep -q -e "{}"'.format(dataset)
+        command += ' | grep -q -e "^{}$"'.format(dataset)
         try:
             sub_process = self._execute(command, capture_output=True)
         except CommandExecutionError as e:
@@ -55,7 +71,7 @@ class ZfsCommands(BaseShellCommand):
 
     def has_snapshot(self, dataset: str, snapshot: str) -> bool:
         command = "zfs list -H -o name -t snapshot"
-        command += ' | grep -q -e "{}@{}"'.format(dataset, snapshot)
+        command += ' | grep -q -e "^{}@{}$"'.format(dataset, snapshot)
         try:
             sub_process = self._execute(command, capture_output=True)
         except CommandExecutionError as e:
@@ -176,6 +192,20 @@ class ZfsCommands(BaseShellCommand):
             raise ValueError("restore_source_zfs_path must contain a pool and a dataset")
         if '@' not in restore_source_zfs_path:
             raise ValueError("restore_source_zfs_path must contain a snapshot")
+        if replace_parent_move_children and self.has_dataset(
+                restore_target_zfs_path + TARGET_DATASET_REPLACEMENT_POSTFIX):
+            if wipe_replacement:
+                self.delete_dataset(restore_target_zfs_path + TARGET_DATASET_REPLACEMENT_POSTFIX, with_snapshots=True)
+            else:
+                raise ZfsCommandsError("The temporary replacement dataset {} already exists.".format(
+                    restore_target_zfs_path + TARGET_DATASET_REPLACEMENT_POSTFIX))
+        if replace_parent_move_children and self.has_dataset(
+                restore_target_zfs_path + REPLACED_ORIGINAL_DATASET_POSTFIX):
+            if wipe_replacement:
+                self.delete_dataset(restore_target_zfs_path + REPLACED_ORIGINAL_DATASET_POSTFIX, with_snapshots=True)
+            else:
+                raise ZfsCommandsError("The replacement dataset {} already exists.".format(
+                    restore_target_zfs_path + REPLACED_ORIGINAL_DATASET_POSTFIX))
 
         # region recreate the parent datasets of the restore_target_zfs_path
         restore_target_poolname = Path(restore_target_zfs_path).parts[0]
@@ -195,7 +225,7 @@ class ZfsCommands(BaseShellCommand):
         # region children renaming
 
         if replace_parent_move_children:
-            effective_restore_target_zfs_path = restore_target_zfs_path + '.replacement'
+            effective_restore_target_zfs_path = restore_target_zfs_path + TARGET_DATASET_REPLACEMENT_POSTFIX
         else:
             effective_restore_target_zfs_path = restore_target_zfs_path
 
@@ -227,7 +257,7 @@ class ZfsCommands(BaseShellCommand):
             if self.has_dataset(restore_target_zfs_path):
                 # list_datasets will include all children, even sub-children
                 # we have to filter out the sub-children, which contain an additional slash
-                children = [restore_target_zfs_path+'/'+dataset
+                children = [restore_target_zfs_path + '/' + dataset
                             for dataset in self.list_datasets(restore_target_zfs_path)
                             if '/' not in dataset]
 
@@ -239,12 +269,15 @@ class ZfsCommands(BaseShellCommand):
                                                                               effective_restore_target_zfs_path, 1)),
                                   capture_output=False)
                 self._execute('zfs rename "{}" "{}"'.format(restore_target_zfs_path,
-                                                            restore_target_zfs_path + '.replaced'),
+                                                            restore_target_zfs_path
+                                                            + REPLACED_ORIGINAL_DATASET_POSTFIX),
                               capture_output=False)
-                self._execute('zfs rename "{}" "{}"'.format(effective_restore_target_zfs_path, restore_target_zfs_path),
+                self._execute('zfs rename "{}" "{}"'.format(effective_restore_target_zfs_path,
+                                                            restore_target_zfs_path),
                               capture_output=False)
                 if wipe_replacement:
-                    self.delete_dataset(restore_target_zfs_path, with_snapshots=True)
+                    self.delete_dataset(restore_target_zfs_path + REPLACED_ORIGINAL_DATASET_POSTFIX,
+                                        with_snapshots=True)
             else:
                 print("No children to move")
         # endregion

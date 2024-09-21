@@ -6,13 +6,16 @@ from os.path import expandvars
 from typing import Optional, List, Dict, Tuple
 
 from ZfsBackupTool.BackupPlan import BackupPlan
-from ZfsBackupTool.BackupPlan.Operations import make_next_backup_view, map_snapshots_to_data_sources
+from ZfsBackupTool.BackupPlan.Operations import (make_next_backup_view, map_snapshots_to_data_sources,
+                                                 find_snapshot_holes_of_dataset, PlanningException,
+                                                 find_repairable_snapshots, find_conflicting_intermediate_snapshots,
+                                                 find_initial_conflicting_snapshots, find_restore_chain_holes)
 from ZfsBackupTool.BackupSetup import BackupSetup
 from ZfsBackupTool.Config import TargetGroup, BackupSource
 from ZfsBackupTool.Constants import (SNAPSHOT_PREFIX_POSTFIX_SEPARATOR, INITIAL_SNAPSHOT_POSTFIX,
                                      TARGET_STORAGE_SUBDIRECTORY, INITIALIZED_FILE_NAME)
 from ZfsBackupTool.ShellCommand import ShellCommand, SshHost
-from ZfsBackupTool.Zfs import scan_zfs_pools, PoolList, DataSet, ZfsResolveError
+from ZfsBackupTool.Zfs import scan_zfs_pools, PoolList, ZfsResolveError
 
 
 # region setup helper class for environment expanding in config file
@@ -79,9 +82,8 @@ class ZfsBackupTool(object):
                                help='Perform backup only to targets starting with given filter.')
     restore_parser = subparsers.add_parser('restore', help='Perform restore into given root path.',
                                            description='Perform restore into given root path.')
-    restore_parser.add_argument('restore', type=str, help='Perform restore into given root path. '
-                                                          'Use . for inplace restore. '
-                                                          'WARNING: This will may cause temporary data loss.')
+    restore_parser.add_argument('restore_path', type=str,
+                                help='Perform restore into given zfs path. Use . for inplace restore.')
     restore_parser.add_argument('-f', '--filter',
                                 help='Perform restore only for datasets starting with given filter.')
     restore_parser.add_argument('--force', action='store_true',
@@ -145,16 +147,16 @@ class ZfsBackupTool(object):
             if self.cli_args.subparser_name is None:
                 self.cli_parser.print_help()
                 sys.exit(1)
-            if self.cli_args.subparser_name == 'list':
-                self.do_list()
             if self.cli_args.subparser_name == 'init':
                 self.do_init()
+            if self.cli_args.subparser_name == 'list':
+                self.do_list()
             if self.cli_args.subparser_name == 'backup':
                 self.do_backup()
-            if self.cli_args.subparser_name == 'restore':
-                self.do_restore()
             if self.cli_args.subparser_name == 'verify':
                 self.do_verify()
+            if self.cli_args.subparser_name == 'restore':
+                self.do_restore()
         except KeyboardInterrupt:
             # only print stack trace if debug is enabled
             if self.cli_args.debug:
@@ -166,12 +168,16 @@ class ZfsBackupTool(object):
     def do_check_programs_installed(self):
         print("Checking if all locally needed programs are installed...")
         for program in ["ssh", "zfs", "pv", "sha256sum"]:
-            self.shell_command.program_is_installed(program)
+            self.shell_command.program_is_installed(program, verbose=True)
         for host in self.config.get_all_hosts():
+            if host is None:
+                # already checked locally
+                continue
             self.shell_command.set_remote_host(host)
             print("Checking if all remotely needed programs are installed on {} ...".format(host or 'localhost'))
             for program in ["pv", "sha256sum"]:
-                self.shell_command.program_is_installed(program)
+                self.shell_command.program_is_installed(program, verbose=True)
+        print("All needed programs are installed.")
 
     def do_list(self):
         # scan local zfs setup
@@ -187,7 +193,7 @@ class ZfsBackupTool(object):
         for source, pools in backup_source_configured_pools_mapping.items():
             if not pools.has_datasets():
                 print("Source {} has no datasets".format(source.name))
-                pools.print()
+                pools.print(with_incremental_base=self.cli_args.debug)
                 sys.exit(1)
 
         # endregion
@@ -205,7 +211,7 @@ class ZfsBackupTool(object):
             else:
                 for (host, target_path), pools in target_pools.items():
                     print("Target: {}:{}".format(host or 'localhost', target_path))
-                    pools.print()
+                    pools.print(with_incremental_base=self.cli_args.debug)
                     print()
         else:
             if self.cli_args.plain:
@@ -217,7 +223,7 @@ class ZfsBackupTool(object):
                     print("Target: {}".format(', '.join(
                         "{}:{}".format(host or 'localhost', target_path)
                         for (host, target_path) in source.get_all_host_taget_paths())))
-                    pools.print()
+                    pools.print(with_incremental_base=self.cli_args.debug)
                     print()
 
     def do_init(self):
@@ -229,9 +235,9 @@ class ZfsBackupTool(object):
                                                                  INITIALIZED_FILE_NAME),
                                                     "initialized")
             print("Target {}:{} initialized.".format(host or 'localhost', target))
-        print("Initialization done.")
         print("Checking if all needed programs are installed...")
         self.do_check_programs_installed()
+        print("Initialization done.")
 
     def do_backup(self):
         # scan local zfs setup
@@ -241,14 +247,33 @@ class ZfsBackupTool(object):
         # filter out source pools by config
         backup_source_configured_pools_mapping = self.config.filter_by_sources(local_pools)
 
-        # region check if all sources found a dataset
+        # region check if all sources found a dataset and backup chain is complete
 
         # verify all sources found a pool/dataset
         for source, pools in backup_source_configured_pools_mapping.items():
             if not pools.has_datasets():
                 print("Source {} has no datasets".format(source.name))
-                pools.print()
+                pools.print(with_incremental_base=self.cli_args.debug)
                 sys.exit(1)
+
+        # we should also check, if the local side is missing any snapshots. if this is the case, we cannot restore
+        # because we cannot restore intermediate snapshots without the full chain of snapshots (A->B->C is ok,
+        # A->C is not). Datasets are allowed to be missing, but we at least need a consistent snapshot chain.
+        for local_pool in PoolList.merge(*backup_source_configured_pools_mapping.values()):
+            for dataset in local_pool.iter_datasets():
+                dataset_holes = find_snapshot_holes_of_dataset(dataset, self.config.snapshot_prefix)
+                if dataset_holes.has_snapshots():
+                    print("Dataset {} has holes in the snapshot chain".format(dataset.zfs_path))
+                    print("This would fail the repair process.")
+                    print("A consistent snapshot chain is needed.")
+                    print("Solutions for this:")
+                    print("1. Perform a new backup with the --new flag.")
+                    print("2. Perform a repair of the local side with the restore command.")
+                    print("3. Remove local snapshots which come after the holes.")
+                    print()
+                    print("Holes:")
+                    dataset_holes.print(with_incremental_base=self.cli_args.debug)
+                    sys.exit(1)
 
         # endregion
 
@@ -268,8 +293,9 @@ class ZfsBackupTool(object):
                     *configured_target_pools.values())
 
             # clean old snapshots
-            self.backup_plan.clean_snapshots(PoolList.merge(*backup_source_configured_pools_mapping.values()),
-                                             self.cli_args.filter)
+            self.backup_plan.clean_snapshots(
+                PoolList.merge(*backup_source_configured_pools_mapping.values()
+                               ).filter_include_by_zfs_path_prefix(self.cli_args.filter))
             # and on remote
 
             # this might cause dataloss, restore from backup is not possible after this
@@ -316,7 +342,7 @@ class ZfsBackupTool(object):
                         print("Repairing target '{}:{}' for source '{}'".format(target_group.remote or 'localhost',
                                                                                 target_path,
                                                                                 source.name))
-                        repair_diff.print()
+                        repair_diff.print(with_incremental_base=self.cli_args.debug)
                         print()
                         if (target_group.remote, target_path) in repair_pools:
                             repair_pools[(target_group.remote, target_path)] = PoolList.merge(
@@ -352,18 +378,20 @@ class ZfsBackupTool(object):
                                       backup_snapshots).iter_datasets():
             # also filter out datasets that are not included with the filter argument
             if self.cli_args.filter and not dataset.zfs_path.startswith(self.cli_args.filter):
-                print("Skipping dataset {} because it does not match the filter".format(dataset.zfs_path))
                 continue
             try:
                 dataset.get_snapshot_by_name(
                     self.config.snapshot_prefix + SNAPSHOT_PREFIX_POSTFIX_SEPARATOR + INITIAL_SNAPSHOT_POSTFIX)
             except ZfsResolveError:
                 print("No initial backup snapshot found for dataset {}".format(dataset.zfs_path))
-                print("Cannot proceed without intermediate backup snapshots")
-                print("Aborting...")
-                sys.exit(1)
+                print("Restore might only work in intermediate mode, not in full mode.")
+
+        # also map the backup snapshots to configured sources
+        configured_backup_snapshots = self.config.filter_by_sources(backup_snapshots)
 
         # create new snapshots
+        print("New backup snapshots:")
+        backup_snapshots.print(with_incremental_base=self.cli_args.debug)
         self.backup_plan.create_snapshots(backup_snapshots)
 
         # endregion
@@ -372,7 +400,7 @@ class ZfsBackupTool(object):
 
         # map concrete backup target to the pools that need to be written
         backup_pools: Dict[Tuple[Optional[SshHost], str], PoolList] = {}
-        for backup_source, pools in self.config.filter_by_sources(backup_snapshots).items():
+        for backup_source, pools in configured_backup_snapshots.items():
             # iter target groups coming from the source/local pool view
             # this will map the source pools to the target pools
             for target_group in backup_source.targets:
@@ -395,19 +423,25 @@ class ZfsBackupTool(object):
         print("Backup done.")
 
     def do_restore(self):
-        if self.cli_args.restore.startswith('/'):
+        # if self.cli_args.incremental and self.cli_args.replace:
+        #     print("Options --incremental and --replace are mutually exclusive")
+        #     sys.exit(1)
+        if self.cli_args.restore_path.startswith('/'):
             print("Zfs path must not start with /")
             sys.exit(1)
-        if self.cli_args.restore == '.':
+        if self.cli_args.restore_path == '.':
             restore_prefix = ''
         else:
-            restore_prefix = self.cli_args.restore
+            restore_prefix = self.cli_args.restore_path
             if not restore_prefix.endswith('/'):
                 restore_prefix += '/'
 
         # scan local zfs setup and build up incremental snapshot refs
         all_local_pools = scan_zfs_pools(self.shell_command)
         all_local_pools.build_incremental_snapshot_refs()
+
+        # filter out source pools by our backup snapshot prefix
+        configured_local_backup_pools = self.config.filter_by_prefix(all_local_pools)
 
         # filter out source pools by config
         configured_local_pools_sources_mapping = self.config.filter_by_sources(all_local_pools)
@@ -421,8 +455,17 @@ class ZfsBackupTool(object):
         all_remote_pools = PoolList.merge(*remote_pools_host_paths_mapping.values())
         all_remote_pools.build_incremental_snapshot_refs()
 
+        # also build up the incremental snapshot refs for the remote pools on each host
+        for host, remote_pool in remote_pools_host_paths_mapping.items():
+            remote_pool.build_incremental_snapshot_refs()
+
         # filter out remote pools by config
         configured_remote_pools_sources_mapping = self.config.filter_by_sources(all_remote_pools)
+        # also do this with the host-path mapping
+        configured_remote_pools_host_paths_mapping = {}
+        for host_path, remote_pool in remote_pools_host_paths_mapping.items():
+            configured_remote_pool = PoolList.merge(*self.config.filter_by_sources(remote_pool).values())
+            configured_remote_pools_host_paths_mapping[host_path] = configured_remote_pool
 
         # we now have gathered all infos about our local and remote status.
         # we also know the status of the configured restricted view.
@@ -434,258 +477,176 @@ class ZfsBackupTool(object):
         assert not set(configured_local_pools_sources_mapping.keys()
                        ).difference(configured_remote_pools_sources_mapping.keys())
 
-        # we now know, that we have the same sources configured on local and remote
-        # we can now build up a list of pools/datasets/snapshots that need to be repaired logically.
-        # after that we will find out, where we can fetch the repair data from
+        # we should also check, if the remote side is missing any snapshots. if this is the case, we cannot restore
+        # because we cannot restore intermediate snapshots without the full chain of snapshots (A->B->C is ok,
+        # A->C is not, B is hardly needed for C).
 
-        repair_pools: PoolList = PoolList()
-        for source, remote_pool in configured_remote_pools_sources_mapping.items():
-            # the main problem is the shifting of the backup into another zfs path position with the
-            # self.cli_args.restore parameter. we need to find out, which snapshots are missing locally.
-            # first we need to do the actual shifting of the logical target-state into the correct zfs path position.
-            final_expected_pool = remote_pool.prefixed_view(restore_prefix)
-            # now we need to find the missing snapshots on the local side
-            # for this we can combine the current local pool with the final expected pool
-            # afterwards we can find the difference between the two, so we get a set of effectively missing snapshots
-            # worst case: the whole shifted view is returned, because all is missing under the target path
-            # mixed case: some datasets are missing, some are not. we need to repair the missing ones.
-            repair_diff = PoolList.merge(all_local_pools, final_expected_pool).difference(all_local_pools)
-            # local_pool = configured_local_pools_sources_mapping[source]
-            # repair_diff = remote_pool.difference(local_pool)
+        logical_remote_holes = find_restore_chain_holes(
+            restore_source=PoolList.merge(*configured_remote_pools_sources_mapping.values()
+                                          ).filter_include_by_zfs_path_prefix(restore_prefix),
+            snapshot_prefix=self.config.snapshot_prefix)
+
+        remote_holes: Dict[Tuple[Optional[SshHost], str], PoolList] = {}
+        for remote_host_path, remote_pool in configured_remote_pools_host_paths_mapping.items():
             if self.cli_args.filter:
-                repair_diff = repair_diff.filter_include_by_zfs_path_prefix(self.cli_args.filter)
+                real_remote_pool = remote_pool.filter_include_by_zfs_path_prefix(self.cli_args.filter)
+            else:
+                real_remote_pool = remote_pool
+            if not real_remote_pool.has_snapshots():
+                continue
+            holes = find_restore_chain_holes(
+                restore_source=real_remote_pool,
+                snapshot_prefix=self.config.snapshot_prefix)
+            if holes.has_snapshots():
+                remote_holes[remote_host_path] = holes
+        if logical_remote_holes.has_snapshots():
+            print("Remote side has holes in the snapshot chain")
+            print("This would fail the restore process")
+            print("We need to repair the remote side first")
+            for remote_host_path, holes in remote_holes.items():
+                print("Holes on {}:{}".format(remote_host_path[0] or 'localhost', remote_host_path[1]))
+                holes.print(with_incremental_base=self.cli_args.debug)
+            sys.exit(1)
+
+        # restore source does not have any holes, we can now build up a list of pools/datasets/snapshots that need to
+        # be repaired logically
+
+        # to restore the backup correctly, we must account for the shifting of the backup into another zfs path position
+        # aka the restore target path. we need to find out, which snapshots are missing locally in that specific path.
+        # -> we have to filter everything out, except the datasets that are under the restore path
+        # the restore path can also be 'in place' aka '.', which means the backup is restored into the same zfs path
+        # to find the corresponding remote sources, we must also shift all remote sources into the restore path, so
+        # they can match with the local filtered view.
+        # we can then find the missing snapshots on the local side by comparing the local view with the shifted remote
+        # view. the difference is the set of effectively missing snapshots.
+        # we can also change the size of this set by using the --incremental flag, which will only restore the latest
+        # missing snapshots, not the whole chain from first missing snapshot to the last needed.
+
+        local_repair_set = PoolList()
+        for source in configured_remote_pools_sources_mapping.keys():
+            # local_pool = configured_local_pools_sources_mapping[source]
+            remote_pool = configured_remote_pools_sources_mapping[source]
+            # also filter out datasets that are not included with the filter argument, this is for remote side before
+            # shifting the view
+            if self.cli_args.filter:
+                remote_pool = remote_pool.filter_include_by_zfs_path_prefix(self.cli_args.filter)
+
+            # do the shifting and filtering of the local and remote view
+            local_pool = configured_local_backup_pools.filter_include_by_zfs_path_prefix(
+                restore_prefix)  # filter out datasets
+            remote_pool = remote_pool.prefixed_view(restore_prefix)  # shift the whole pool into the restore path
+
+            repair_diff = find_repairable_snapshots(
+                source_pools=remote_pool,
+                target_pools=local_pool,
+                incremental_only=self.cli_args.incremental)
             if repair_diff.has_snapshots():
-                # print("Repairing source: ", source.name)
-                # repair_diff.print()
-                repair_pools = PoolList.merge(repair_pools, repair_diff)
+                print("Repairing source: ", source.name)
+                repair_diff.print(with_incremental_base=self.cli_args.debug)
+                local_repair_set = PoolList.merge(local_repair_set, repair_diff)
 
-        if not repair_pools.has_snapshots():
-            print("No snapshots need repairing, all ok :)")
-            return
+        # we now have a set of pools/datasets/snapshots that need to be repaired logically.
+        # we also grouped them together into one, and not a per configured source basis.
 
-        # if only incremental snapshots are needed, we have to filter out snapshots that are previous to the first
-        # locally still existing snapshot
-        # basically we do the inverse to the following step, where we re-include incremental snapshots between the first
-        # needed and all following available snapshots
-        # we have to strip away all previous snapshots and only keep the latest missing snapshot
-        # but only, if we dont have any newer snapshots available on the local side
-        # if thats the case, we can skip the restore completely, because we already have the newest state
+        # before we can restore the backup, we need to find out, if anything could conflict with the restore process
+        # we need to check, if the restore path already contains intermediate backup snapshots
+        # we need to check, if the restore path already contains datasets, if we have to restore initial snaphots
 
-        if self.cli_args.incremental:
-            for dataset in repair_pools.iter_datasets():
-                # try to resolve it on the local pool, but also shift the local pool to the restore prefix
-                # so we
-                try:
-                    local_dataset = all_local_pools.get_dataset_by_path(dataset.zfs_path)
-                except ZfsResolveError:
-                    # dataset is missing on local -> keep restore as is
-                    continue
-                # find the last existing snapshot on the local side
-                if not local_dataset.has_snapshots():
-                    # no snapshots on local side -> keep restore as is
-                    continue
-                last_existing_snapshot = list(local_dataset.iter_snapshots())[-1]
-                # filter out all previous snapshots
-                filtered_dataset = dataset.filter_previous_snapshots(self.config.snapshot_prefix,
-                                                                     last_existing_snapshot)
-                # if we have any snapshots left, we need to restore them, so we replace the already existing repair
-                # dataset
-                repair_pools.remove_dataset(dataset)
-                repair_pools.add_dataset(filtered_dataset)
+        conflicting_intermediate_snapshots = find_conflicting_intermediate_snapshots(
+            repair_diff=local_repair_set,
+            complete_target=all_local_pools,
+            skip_sortability=False  # we can sort by the creation date, because we have full zfs access for local side
+        )
+        hard_conflicting_datasets = find_initial_conflicting_snapshots(
+            repair_diff=local_repair_set,
+            complete_target=all_local_pools,
+        )
 
-        if not repair_pools.has_snapshots():
-            print("No snapshots need repairing, all ok :)")
-            return
+        # before we print infos about the conflicts, we should check if we can restore the needed snapshots
+        # for this we have to complete the restore set with the needed additional snapshots. Those snapshots come from
+        # the conflicting snapshot sets, which are not in the repair set.
+        # the conflicting snapshots need to be re-created, so we can restore the local side correctly.
+        # the conflicting snapshot sets also include snapshots, which might not belong to us, aka are not configured.
+        # we need to filter out those, so we only re-create the snapshots, that are actually managed by us.
+        local_repair_set = PoolList.merge(local_repair_set,
+                                          PoolList.merge(
+                                              *self.config.filter_by_sources(conflicting_intermediate_snapshots
+                                                                             ).values()))
+        local_repair_set = PoolList.merge(local_repair_set,
+                                          PoolList.merge(*self.config.filter_by_sources(hard_conflicting_datasets
+                                                                                        ).values()))
 
-        print("hard missing snapshots:")
-        repair_pools.print()
-
-        # we now have to refine this list even more. restores of single intermediate snapshots which have snapshot
-        # children are not possible. we need to restore the whole dataset with all snapshots from the first missing
-        # snapshot up to the latest/last snapshot.
-
-        # to do this, we need to create a list of pools/datasets/snapshots that are configured and available remotely.
-        # afterwards we also have to find out, if the local pools have snapshots that are missing on the remote pools,
-        # because this would fail the restore process. intermediate snapshots cannot be restored alone.
-        # including snapshot children is required for restore, but for this we need the restore data from the remote.
-        # if snapshots are missing on the remote side, but exist on the local side, this would be unsolvable.
-        # we would have to delete local snapshots and create data loss that way.
-        # first backing them up and then restoring it is a possible solution, but this can be solved by repairing the
-        # remote backups.
-        all_remote_configured_pools = PoolList.merge(*configured_remote_pools_sources_mapping.values())
-        all_local_configured_pools = PoolList.merge(*configured_local_pools_sources_mapping.values())
-
-        intermediate_children_of_repair_pools: PoolList = PoolList()
-        conflicting_intermediate_snapshots = PoolList()
-        conflicting_existing_target_snapshots = PoolList()
-        for pool in repair_pools:
-            repair_pool = pool.copy()
-            intermediate_children_of_repair_pools.add_pool(repair_pool)
-            for dataset in pool:
-                # resolve the dataset on the remote side which contains all snapshots from the first missing snapshot
-                # up to the latest snapshot
-                first_needed_snapshot = next(dataset.iter_snapshots())
-                fully_available_dataset = all_remote_configured_pools.prefixed_view(
-                    restore_prefix).get_dataset_by_path(dataset.zfs_path)
-                try:
-                    current_local_dataset = all_local_configured_pools.get_dataset_by_path(dataset.zfs_path)
-                except ZfsResolveError:
-                    # the whole dataset is missing on local -> copy the remote dataset object without snapshots.
-                    current_local_dataset = fully_available_dataset.copy()
-                logical_full_dataset = DataSet.merge(pool.pool_name,
-                                                     fully_available_dataset, current_local_dataset)
-                incremental_children_dataset = logical_full_dataset.get_incremental_children(first_needed_snapshot)
-
-                # verify that the intermediate needed snapshots are available on the remote side
-                if incremental_children_dataset.difference(fully_available_dataset).has_snapshots():
-                    print("Intermediate snapshots are missing on the remote side")
-                    print("This would fail the restore process")
-                    print("We need to repair the remote side first")
-                    print("needed snapshots for full restore:")
-                    incremental_children_dataset.print()
-                    print("missing intermediate snapshots:")
-                    incremental_children_dataset.difference(fully_available_dataset).print()
-                    print("Remote available snapshots:")
-                    fully_available_dataset.print()
-                    print("Local available snapshots:")
-                    current_local_dataset.print()
-                    return
-
-                # verify that the intermediate needed snapshots are not existing on the local side
-                if incremental_children_dataset.intersection(current_local_dataset).has_snapshots():
-                    if not self.cli_args.force:
-                        print("Intermediate snapshots are existing on the local side for dataset: {}".format(
-                            dataset.zfs_path))
-                    conflicting_intermediate_snapshots.add_dataset(
-                        incremental_children_dataset.intersection(current_local_dataset))
-
-                # verify that the restore target does not have any already existing snapshots, if the first needed
-                # snapshot is the initial snapshot
-                if first_needed_snapshot.snapshot_name.endswith(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR
-                                                                + INITIAL_SNAPSHOT_POSTFIX):
-                    try:
-                        already_existing_target_dataset = all_local_pools.get_dataset_by_path(
-                            first_needed_snapshot.dataset_zfs_path)
-                    except ZfsResolveError:
-                        # target has no snapshots -> all ok
-                        pass
-                    else:
-                        if already_existing_target_dataset.has_snapshots():
-                            if not self.cli_args.replace:
-                                print("Existing snapshots in restore target would prevent restore of: {}".format(
-                                    first_needed_snapshot.zfs_path))
-                            conflicting_existing_target_snapshots.add_dataset(already_existing_target_dataset)
-
-                # verify that no intermediate snapshot is missing
-                if any(not snapshot.has_incremental_base()
-                       for snapshot in incremental_children_dataset
-                       if not snapshot.snapshot_name.endswith(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR
-                                                              + INITIAL_SNAPSHOT_POSTFIX)
-                       ):
-                    breakpoint()
-
-                repair_pool.add_dataset(incremental_children_dataset)
-
-        # diff out all other existing snapshots
-        conflicting_existing_target_snapshots = conflicting_existing_target_snapshots.difference(
-            intermediate_children_of_repair_pools)
-
-        abort_due_to_conflicts = False
+        # now we can attempt to actually restore them. but we also have to undo the shifting of the view, so we can
+        # successfully map the needed snapshots to the available data sources.
+        deshifted_local_repair_set = local_repair_set.prefixed_view(restore_prefix, deshift=True)
+        try:
+            restore_snapshots_with_source = map_snapshots_to_data_sources(deshifted_local_repair_set,
+                                                                          configured_remote_pools_host_paths_mapping)
+        except PlanningException as e:
+            print("Error:")
+            print("Could not map snapshots to sources:")
+            print(e)
+            sys.exit(1)
 
         if conflicting_intermediate_snapshots.has_snapshots():
-            if self.cli_args.force:
-                print("removing existing intermediate snapshots on local side")
-                self.backup_plan.clean_snapshots(
-                    conflicting_intermediate_snapshots,
-                    zfs_path_filter=self.cli_args.filter)
-            else:
-                print("Error:")
-                print("The following intermediate snapshots need to be removed on the local side")
-                conflicting_intermediate_snapshots.print(with_incremental_base=False)
-                print("Use --force to remove them")
-                print("Alternatively you can use --incremental to only restore the latest missing snapshots")
-                print()
-                abort_due_to_conflicts = True
+            print()
+            print("Conflicting intermediate snapshots:")
+            conflicting_intermediate_snapshots.print(with_incremental_base=self.cli_args.debug)
+        if hard_conflicting_datasets.has_snapshots():
+            print()
+            print("Hard conflicting datasets:")
+            hard_conflicting_datasets.print(with_incremental_base=self.cli_args.debug)
 
-        replace_datasets: List[DataSet] = []
-        if conflicting_existing_target_snapshots.has_snapshots():
-            # # we must verify, if the conflicting datasets have any dataset children.
-            # # if they have, we must not wipe them, because the children would be wiped too.
-            # # this is a hard error for now. restoring would need to move the cildren to a temp location,
-            # # wipe and restore the missing dataset+snapshots and then move the children back.
-            # # deleting is a hard requirement for encrypted datasets, because restoring an encrypted snapshot is only
-            # # possible, if the dataset does not already exist.
-            # if any(
-            #         any(d.zfs_path.startswith(dataset.zfs_path+'/')
-            #             for d in all_local_pools.iter_datasets())
-            #         for dataset in conflicting_existing_target_snapshots.iter_datasets()):
-            #     print("Error:")
-            #     print("The following existing snapshots AND datasets need to be removed in the restore target")
-            #     conflicting_existing_target_snapshots.print(with_incremental_base=False)
-            #     print("However, these datasets have child datasets, which would be wiped too.")
-            #     print("Please resolve this manually, by moving the conflicting child datasets into a temporary zfs "
-            #           "location or by deleting all child datasets (WARNING: DATA LOSS).")
-            #     print()
-            #     abort_due_to_conflicts = True
-            # el
-            if self.cli_args.replace:
-                # why is wiping/replacing needed?
-                # A: restoring an initial snapshot into an already existing dataset (without any snapshots)
-                # is possible. However, if the initial snapshot is encrypted, the dataset must be deleted
-                # before, otherwise the encryption would be stripped away or the restore simply fails.
+        abort_due_to_conflicts = False
+        if conflicting_intermediate_snapshots.has_snapshots() and not self.cli_args.force:
+            print()
+            print("Error:")
+            print("Intermediate snapshots found in restore path")
+            print("This would fail the restore process")
+            print("Use --force to remove them")
+            print("Alternatively you can use --incremental to only restore the latest missing snapshots.")
+            print("The --force flag might still be needed in conjunction with --incremental.")
+            abort_due_to_conflicts = True
 
-                # wiping the datasets is needed but tricky...
-                # if the wiped datasets has dataset children, the cildren get wiped too.
-                # this is not what we want. the children might not need any wiping/restore.
-                # to reduce dataloss, we will not wipe the datasets, but replace them.
-                # the old datasets will be replaced kept.
-                # for restore we must replace these datasets with the new one
-                # we checked for this in the previous step.
-                replace_datasets = list(conflicting_existing_target_snapshots.iter_datasets())
-            else:
-                print("Error:")
-                print("The following existing snapshots AND datasets need to be removed in the restore target")
-                conflicting_existing_target_snapshots.print(with_incremental_base=False)
-                print("Cannot proceed without removing them")
-                print("Use --replace to replace them")
-                print("Use --replace AND --wipe to wipe them")
-                print()
-                abort_due_to_conflicts = True
+        if hard_conflicting_datasets.has_snapshots() and not self.cli_args.replace:
+            print()
+            print("Error:")
+            print("Found existing datasets, which would prevent the restore of the initial snapshot:")
+            hard_conflicting_datasets.print(with_incremental_base=self.cli_args.debug)
+            print("Cannot proceed without removing/replacing the conflicting datasets.")
+            print("These existing snapshots AND datasets need to be removed or replaced in the restore target.")
+            print("The datasets get replaced or deleted by this process.")
+            print("Snapshots in the replaced datasets will be kept and moved to a new location. "
+                  "More disk space is needed for this.")
+            print("Use --replace to replace them (Warning: more space needed)")
+            print("Use --replace AND --wipe to wipe them (Warning: permanent data loss)")
+            abort_due_to_conflicts = True
+
         if abort_due_to_conflicts:
             print("Aborting...")
             sys.exit(1)
 
-        repair_pools_with_intermediate_children = PoolList.merge(repair_pools, intermediate_children_of_repair_pools)
-
-        # we now have a list of pools/datasets/snapshots that need to be repaired
-        # we will now find out, where we can fetch the repair data from
-        print("Restoring the following datasets:")
-        repair_pools_with_intermediate_children.print()
-
-        # we only need the snapshot objects in the correct order and the host-target-path-mappings from where to fetch
-        # the snapshot data from
-        # but our repair set is shifted by the restore_prefix, so we need to de-shift the repair set
-        de_shifted_repair_pools_with_intermediate_children = repair_pools_with_intermediate_children.prefixed_view(
-            restore_prefix, deshift=True)
-        repair_snapshot_restore_source_mapping = map_snapshots_to_data_sources(
-            de_shifted_repair_pools_with_intermediate_children,
-            remote_pools_host_paths_mapping)
-
         # we now have a list of snapshots and the host-target-path-mappings from where we can fetch the repair data from
-        if restore_prefix:
-            # restore to given path
-            self.backup_plan.restore_snapshots(repair_snapshot_restore_source_mapping,
-                                               replace_dataset=replace_datasets,
-                                               restore_target=restore_prefix,
-                                               inplace=False,
-                                               wipe_replacement=self.cli_args.wipe)
-        else:
+        if restore_prefix == '':
             # inplace restore
-            self.backup_plan.restore_snapshots(repair_snapshot_restore_source_mapping,
-                                               replace_dataset=replace_datasets,
-                                               restore_target=None,
-                                               inplace=True,
-                                               wipe_replacement=self.cli_args.wipe)
+            self.backup_plan.restore_snapshots(
+                restore_snapshots=restore_snapshots_with_source,
+                replace_dataset=list(hard_conflicting_datasets.iter_datasets()),
+                conflicting_snapshots=list(conflicting_intermediate_snapshots.filter_include_by_zfs_path_prefix(
+                    self.cli_args.filter).iter_datasets()),
+                restore_target=None,
+                inplace=True,
+                wipe_replacement=self.cli_args.wipe)
+        else:
+            # restore to given path
+            self.backup_plan.restore_snapshots(
+                restore_snapshots=restore_snapshots_with_source,
+                replace_dataset=list(hard_conflicting_datasets.iter_datasets()),
+                conflicting_snapshots=list(conflicting_intermediate_snapshots.filter_include_by_zfs_path_prefix(
+                    self.cli_args.filter).iter_datasets()),
+                restore_target=restore_prefix,
+                inplace=False,
+                wipe_replacement=self.cli_args.wipe)
 
         print("Restore done.")
 
@@ -703,7 +664,7 @@ class ZfsBackupTool(object):
         for source, pools in backup_source_configured_pools_mapping.items():
             if not pools.has_datasets():
                 print("Source {} has no datasets".format(source.name))
-                pools.print()
+                pools.print(with_incremental_base=self.cli_args.debug)
                 sys.exit(1)
 
         # endregion
@@ -719,56 +680,80 @@ class ZfsBackupTool(object):
         # if --all is used, we will also verify datasets that are not configured in the current config.
         # this means we ignore the primary view and just use the available secondary remote view.
 
+        # we should also check, if the remote side is missing any snapshots. if this is the case, we cannot restore
+        # because we cannot restore intermediate snapshots without the full chain of snapshots (A->B->C is ok,
+        # A->C is not).
+        if self.cli_args.all:
+            hole_scan_pools = PoolList.merge(*target_pools.values())
+        else:
+            hole_scan_pools = PoolList.merge(*backup_source_configured_pools_mapping.values())
+        for remote_pool in hole_scan_pools:
+            for dataset in remote_pool.iter_datasets():
+                dataset_holes = find_snapshot_holes_of_dataset(dataset, self.config.snapshot_prefix)
+                if dataset_holes.has_snapshots():
+                    print("Dataset {} on remote side has holes in the snapshot chain".format(dataset.zfs_path))
+                    print("This would fail the restore process")
+                    print()
+                    print("Holes:")
+                    dataset_holes.print(with_incremental_base=self.cli_args.debug)
+                    sys.exit(1)
+
         if self.cli_args.all:
             # we will now verify all datasets that are available on the remote side
             # we will not use the local pools for this, because we want to verify all datasets on all targets
             # we will use the remote pools as primary view
 
-            self.backup_plan.verify_snapshots(target_pools, self.cli_args.remove_corrupted,
-                                              target_path_prefix_filter=self.cli_args.target_filter,
-                                              zfs_path_prefix_filter=self.cli_args.filter)
-            return  # we are done here
-
-        # find snapshots that need verification for each target
-        verify_pools: Dict[Tuple[Optional[SshHost], str], PoolList] = {}
-        # diff every configured source pool with the found target pools as diff-base
-        for source, pools in backup_source_configured_pools_mapping.items():
-            # iter target groups coming from the source/local pool view
-            # this will map the source pools to the target pools
-            for target_group in source.targets:
-                for target_path in target_group.target_paths:
-                    if self.cli_args.target_filter and not target_path.startswith(self.cli_args.target_filter):
-                        continue
-                    if (target_group.remote, target_path) not in target_pools:
-                        # missing completely, still verify all to trigger warnings
-                        verify_diff = pools.view()
-                    else:
-                        remote = target_pools[(target_group.remote, target_path)]
-                        shared_set = pools.intersection(remote)
-                        source_with_shared = PoolList.merge(pools, shared_set)
-                        verify_diff = source_with_shared
-                    # empty diffs should not be a case, because we actively include the local view
-                    if not verify_diff.has_snapshots():
-                        raise NotImplementedError("Empty diff should not be a case")
-
-                    if self.cli_args.filter:
-                        verify_diff = verify_diff.filter_include_by_zfs_path_prefix(self.cli_args.filter)
-                        if not verify_diff.has_snapshots():
+            invalid_snapshots = self.backup_plan.verify_snapshots(target_pools, self.cli_args.remove_corrupted,
+                                                                  target_path_prefix_filter=self.cli_args.target_filter,
+                                                                  zfs_path_prefix_filter=self.cli_args.filter)
+        else:
+            # find snapshots that need verification for each target
+            verify_pools: Dict[Tuple[Optional[SshHost], str], PoolList] = {}
+            # diff every configured source pool with the found target pools as diff-base
+            for source, pools in backup_source_configured_pools_mapping.items():
+                # iter target groups coming from the source/local pool view
+                # this will map the source pools to the target pools
+                for target_group in source.targets:
+                    for target_path in target_group.target_paths:
+                        if self.cli_args.target_filter and not target_path.startswith(self.cli_args.target_filter):
                             continue
+                        if (target_group.remote, target_path) not in target_pools:
+                            # missing completely, still verify all to trigger warnings
+                            verify_diff = pools.view()
+                        else:
+                            remote = target_pools[(target_group.remote, target_path)]
+                            shared_set = pools.intersection(remote)
+                            source_with_shared = PoolList.merge(pools, shared_set)
+                            verify_diff = source_with_shared
+                        # empty diffs should not be a case, because we actively include the local view
+                        if not verify_diff.has_snapshots():
+                            raise NotImplementedError("Empty diff should not be a case")
 
-                    print("Verifying target '{}:{}' for source '{}'".format(target_group.remote or 'localhost',
-                                                                            target_path,
-                                                                            source.name))
-                    verify_diff.print()
-                    print()
-                    if (target_group.remote, target_path) in verify_pools:
-                        verify_pools[(target_group.remote, target_path)] = PoolList.merge(
-                            verify_pools[(target_group.remote, target_path)],
-                            verify_diff)
-                    else:
-                        verify_pools[(target_group.remote, target_path)] = verify_diff
+                        if self.cli_args.filter:
+                            verify_diff = verify_diff.filter_include_by_zfs_path_prefix(self.cli_args.filter)
+                            if not verify_diff.has_snapshots():
+                                continue
 
-        self.backup_plan.verify_snapshots(verify_pools, self.cli_args.remove_corrupted)
+                        print("Verifying target '{}:{}' for source '{}'".format(target_group.remote or 'localhost',
+                                                                                target_path,
+                                                                                source.name))
+                        verify_diff.print(with_incremental_base=self.cli_args.debug)
+                        print()
+                        if (target_group.remote, target_path) in verify_pools:
+                            verify_pools[(target_group.remote, target_path)] = PoolList.merge(
+                                verify_pools[(target_group.remote, target_path)],
+                                verify_diff)
+                        else:
+                            verify_pools[(target_group.remote, target_path)] = verify_diff
+
+            invalid_snapshots = self.backup_plan.verify_snapshots(verify_pools, self.cli_args.remove_corrupted)
+        if any(p.has_snapshots() for p in invalid_snapshots.values()):
+            print("Verification failed, found invalid snapshots:")
+            for (host, target_path), pools in invalid_snapshots.items():
+                print("Target: {}:{}".format(host or 'localhost', target_path))
+                pools.print(with_incremental_base=self.cli_args.debug)
+                print()
+            sys.exit(1)
         print("Verification done.")
 
     def _itemize_option(self, option_content: Optional[str]) -> List[str]:

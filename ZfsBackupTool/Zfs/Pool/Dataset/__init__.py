@@ -1,4 +1,4 @@
-from typing import Dict, Iterator, List, Iterable, Optional
+from typing import Dict, Iterator, List, Iterable, Optional, Tuple, Any
 
 from ZfsBackupTool.Constants import SNAPSHOT_PREFIX_POSTFIX_SEPARATOR, INITIAL_SNAPSHOT_POSTFIX
 from .Snapshot import Snapshot
@@ -36,6 +36,9 @@ class DataSet(object):
         # finally check the dataset paths and other attributes
         return self.zfs_path == other.zfs_path
 
+    def __hash__(self):
+        return hash(self.zfs_path)
+
     @property
     def dataset_size(self) -> int:
         if self._dataset_size is None:
@@ -45,6 +48,9 @@ class DataSet(object):
     @dataset_size.setter
     def dataset_size(self, value: int):
         self._dataset_size = value
+
+    def has_dataset_size(self) -> bool:
+        return self._dataset_size is not None
 
     def copy(self):
         """
@@ -181,10 +187,21 @@ class DataSet(object):
             new_merged_snapshot = Snapshot.merge(pool_name, dataset_name, *mergable_snapshots)
             new_merged_dataset.add_snapshot(new_merged_snapshot)
 
+        # if all given datasets have the same snapshots and the same size, the merged dataset will also have the same
+        # size, but this also only works if the dataset sizes are set
+
+        if all(dataset.has_dataset_size() for dataset in others):
+            # all datasets must have the same snapshots
+            new_merged_dataset_snapshot_names = set(new_merged_dataset.snapshots.keys())
+            if all(set(dataset.snapshots.keys()) == new_merged_dataset_snapshot_names for dataset in others):
+                dataset_sizes = [dataset.dataset_size for dataset in others]
+                if len(set(dataset_sizes)) == 1:
+                    new_merged_dataset.dataset_size = dataset_sizes[0]
+
         return new_merged_dataset
 
     @classmethod
-    def parse_backup_snapshot(cls, snapshot_name: str):
+    def parse_backup_snapshot(cls, snapshot_name: str) -> Tuple[str, int]:
         """
         Parse a backup snapshot name into its components.
 
@@ -206,6 +223,10 @@ class DataSet(object):
     @classmethod
     def sort_snapshots(cls, snapshots: Iterable[Snapshot]) -> List[Snapshot]:
         snapshots = list(snapshots)
+        # if snapshots have a creation time, sort by creation time
+        if all(snapshot.has_creation_time() for snapshot in snapshots):
+            return sorted(snapshots, key=lambda s: s.get_creation_time())
+        # otherwise sort by snapshot name, but initial snapshots first
         initial_snapshots = sorted([s for s in snapshots
                                     if s.snapshot_name.endswith(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR
                                                                 + INITIAL_SNAPSHOT_POSTFIX)],
@@ -272,6 +293,13 @@ class DataSet(object):
             DataSet: A new dataset containing only the snapshots that are incremental children of the parent snapshot.
         """
         thinned_out_view = self.view()
+        # merge parent into the view, it could be missing and would complete the logical chain
+        if parent.zfs_path not in thinned_out_view.snapshots:
+            thinned_out_view.add_snapshot(parent.view())
+            # build up the incremental chain
+            thinned_out_view.build_incremental_snapshot_refs()
+
+        # remove all snapshots that are not incremental children of the parent snapshot
         for snapshot in list(thinned_out_view.iter_snapshots()):
             thinned_out_view.remove_snapshot(snapshot)
             if snapshot == parent:
@@ -311,16 +339,19 @@ class DataSet(object):
     def drop_snapshots(self):
         self.snapshots.clear()
 
-    def filter_include_by_zfs_path_prefix(self, zfs_path_prefix: str) -> "DataSet":
+    def filter_include_by_zfs_path_prefix(self, zfs_path_prefix: Optional[str]) -> "DataSet":
         """
         Filter out all elements in the pool, which do not match the given zfs path prefix.
         """
-        new_dataset = self.copy()
-
-        for snapshot in self.snapshots.values():
-            if snapshot.zfs_path.startswith(zfs_path_prefix):
+        if zfs_path_prefix is not None and "@" in zfs_path_prefix:
+            new_dataset = self.copy()
+            for snapshot in self.snapshots.values():
+                if zfs_path_prefix is not None and not snapshot.zfs_path.startswith(zfs_path_prefix):
+                    continue
                 snapshot_view = snapshot.view()
                 new_dataset.add_snapshot(snapshot_view)
+        else:
+            new_dataset = self.view()
 
         return new_dataset
 

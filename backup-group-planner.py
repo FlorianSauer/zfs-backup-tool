@@ -1,6 +1,8 @@
 import argparse
 import sys
 
+from humanfriendly import parse_size, format_size
+
 from ZfsBackupTool.ResourcePacker import ResourcePacker, PackingError
 from ZfsBackupTool.ShellCommand import ShellCommand
 from ZfsBackupTool.Zfs import scan_zfs_pools, PoolList
@@ -25,10 +27,8 @@ class BackupGroupPlanner(object):
                                  "Default: 0.15")
 
     cli_parser.add_argument('--packing-method', type=int, default=1,
-                            help="Packing method to use. "
-                                 "1: Filling "
-                                 "2: Bin packing "
-                                 "Default: 1")
+                            help="Packing method to use. Use '1' for simple filling, '2' for bin packing algorithm. "
+                                 "Default: '1'")
     cli_parser.add_argument('--write-config', type=str,
                             help="Generate a config file and write it to the specified path.")
 
@@ -70,11 +70,11 @@ class BackupGroupPlanner(object):
                 dataset = dataset[:-1] if dataset.endswith("/") else dataset
                 source_datasets.append(available_pools.filter_include_by_zfs_path_prefix(dataset))
             else:
-                source_datasets.append(available_pools.filter_include_by_zfs_path_prefix(dataset + '@'))
+                source_datasets.append(available_pools.filter_include_by_zfs_path_prefix(dataset))
 
         disk_priorities = [disk[0] for disk in self.cli_args.disk]
 
-        disk_sizes_with_labels = {disk[0]: int(disk[1]) for disk in self.cli_args.disk}
+        disk_sizes_with_labels = {disk[0]: parse_size(disk[1]) for disk in self.cli_args.disk}
 
         disk_free_percentage = self.cli_args.disk_free_percentage
 
@@ -89,10 +89,10 @@ class BackupGroupPlanner(object):
                     f.write("\n")
                 f.write("\n")
 
-        for i, label in enumerate(disk_priorities):
+        for disk_priority_index, label in enumerate(disk_priorities):
             disk_size = disk_sizes_with_labels[label]
             disk_is_smallest_disk = disk_size == min(disk_sizes_with_labels.values())
-            disk_is_not_smallest_and_last_disk = not (disk_is_smallest_disk and i == len(disk_priorities) - 1)
+            disk_is_not_smallest_and_last_disk = not (disk_is_smallest_disk and disk_priority_index == len(disk_priorities) - 1)
             print("=========================================")
             print("Disk:", label)
             usage_size = 0
@@ -116,26 +116,31 @@ class BackupGroupPlanner(object):
             if self.cli_args.debug:
                 dataset_size_dict = {dataset.zfs_path: self.shell_command.get_dataset_size(dataset.zfs_path,
                                                                                            recursive=False)
-                                     for dataset in datasets}
+                                     for dataset in datasets.iter_datasets()}
                 print("Dataset sizes:")
-                print(repr(dataset_size_dict))
+                for dataset_zfs_path, size in dataset_size_dict.items():
+                    print("  {}: {} ({})".format(dataset_zfs_path, size, format_size(size)))
                 print("Packed packets:")
                 packets_dict = [{k.zfs_path: v for k, v in d.items()} for d in packets]
-                print(repr(packets_dict))
+                for packet_index, packet in enumerate(packets_dict):
+                    print("Packet {}: ".format(packet_index))
+                    for dataset_zfs_path in sorted(packet.keys()):
+                        size = packet[dataset_zfs_path]
+                        print("  {}: {} ({})".format(dataset_zfs_path, size, format_size(size)))
 
             if packets:
-                print("Packet content:")
+                print("Packet content for disk {}:".format(label))
                 for fragment, size in sorted(packets[0].items(), key=lambda x: x[0].zfs_path):
-                    print("  {}: {}".format(fragment.zfs_path, size))
+                    print("  {}: {} ({})".format(fragment.zfs_path, size, format_size(size)))
                     usage_size += size
                     datasets.pools[fragment.pool_name].remove_dataset(fragment)
 
                 if self.cli_args.write_config:
                     # append Source section
+                    # it's not possible to group the datasets back together to the given source_datasets selectors.
+                    # dataset children could be distributed to different disks.
                     with open(self.cli_args.write_config, "a") as f:
-                        f.write("[Source {}]\n".format(
-                            ",".join([dataset.zfs_path
-                                      for dataset in sorted(packets[0].keys(), key=lambda x: x.zfs_path)])))
+                        f.write("[Source Datasets for Disk {}]\n".format(label))
                         f.write("source = {}\n".format(
                             ", ".join([dataset.zfs_path
                                        for dataset in sorted(packets[0].keys(), key=lambda x: x.zfs_path)])))
@@ -151,12 +156,12 @@ class BackupGroupPlanner(object):
                     usage_size += size
                     datasets.pools[dataset.pool_name].remove_dataset(dataset)
 
-            print("Disk size: ", disk_size)
-            print("Usage size:", usage_size)
-            print("Disk free size:", disk_size - usage_size)
+            print("Disk size: {} ({})".format(disk_size, format_size(disk_size)))
+            print("Usage size: {} ({})".format(usage_size, format_size(usage_size)))
+            print("Disk free size: {} ({})".format(disk_size - usage_size, format_size(disk_size - usage_size)))
             print("Disk free percentage:", "{:.2f}%".format(100 - ((usage_size / disk_size) * 100)))
 
-            if not remaining_dataset_size and i < len(disk_priorities) - 1:
+            if not remaining_dataset_size and disk_priority_index < len(disk_priorities) - 1:
                 print("=========================================")
                 print("All datasets mapped to disk. Skipping remaining disks.")
                 return
@@ -164,9 +169,9 @@ class BackupGroupPlanner(object):
         print("=========================================")
         print("=========================================")
 
-        if datasets:
+        if datasets.has_snapshots():
             print("Remaining datasets:")
-            for dataset in sorted(datasets, key=lambda x: x.zfs_path):
+            for dataset in sorted(datasets.iter_datasets(), key=lambda x: x.zfs_path):
                 print(f"  {dataset.zfs_path}")
 
 

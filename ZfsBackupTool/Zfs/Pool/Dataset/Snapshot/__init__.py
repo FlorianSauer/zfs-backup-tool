@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Optional
 
 
@@ -9,10 +10,11 @@ class Snapshot(object):
         self.dataset_zfs_path = "{}/{}".format(pool_name, dataset_name)
         self.zfs_path = "{}/{}@{}".format(pool_name, dataset_name, snapshot_name)
         self._incremental_base: Optional['Snapshot'] = None
+        self._creation_time: Optional[datetime] = None
 
     def __str__(self):
         if self._incremental_base:
-            return "Snapshot({}) -> {}".format(self.zfs_path, self._incremental_base.snapshot_name)
+            return "Snapshot({}) -incr-> {}".format(self.zfs_path, self._incremental_base.snapshot_name)
         return "Snapshot({})".format(self.zfs_path)
 
     def __eq__(self, other):
@@ -29,7 +31,10 @@ class Snapshot(object):
         This method creates a new Snapshot object with the same pool name, dataset name, and snapshot name
         as the current instance. However, the incremental base is not set in the new instance.
         """
-        return Snapshot(self.pool_name, self.dataset_name, self.snapshot_name)
+        snapshot_copy = Snapshot(self.pool_name, self.dataset_name, self.snapshot_name)
+        if self._creation_time:
+            snapshot_copy._creation_time = self._creation_time
+        return snapshot_copy
 
     def prefixed_view(self, prefix: str, deshift: bool = False) -> 'Snapshot':
         """
@@ -48,6 +53,8 @@ class Snapshot(object):
         view_snapshot = Snapshot(pool_name, dataset_name, self.snapshot_name)
         if self._incremental_base:
             view_snapshot._incremental_base = self._incremental_base.prefixed_view(prefix, deshift)
+        if self._creation_time:
+            view_snapshot._creation_time = self._creation_time
         return view_snapshot
 
     def view(self):
@@ -59,7 +66,7 @@ class Snapshot(object):
 
     def print(self, with_incremental_base: bool = True):
         if self.has_incremental_base() and with_incremental_base:
-            print("    Snapshot: {} ({}) -> {}".format(self.snapshot_name, self.zfs_path,
+            print("    Snapshot: {} ({}) -incr-> {}".format(self.snapshot_name, self.zfs_path,
                                                        self._incremental_base.snapshot_name))
         else:
             print("    Snapshot: {} ({})".format(self.snapshot_name, self.zfs_path))
@@ -84,6 +91,10 @@ class Snapshot(object):
         incremental_bases = [snapshot.get_incremental_base() for snapshot in others if snapshot.has_incremental_base()]
         if incremental_bases:
             new_merged_snapshot.set_incremental_base(cls.merge(pool_name, dataset_name, *incremental_bases))
+
+        creation_times = [snapshot.get_creation_time() for snapshot in others if snapshot.has_creation_time()]
+        if creation_times:
+            new_merged_snapshot.set_creation_time(min(creation_times))
         return new_merged_snapshot
 
     def has_incremental_base(self) -> bool:
@@ -96,3 +107,14 @@ class Snapshot(object):
         if not self._incremental_base:
             raise ValueError("Snapshot has no incremental base")
         return self._incremental_base
+
+    def has_creation_time(self) -> bool:
+        return self._creation_time is not None
+
+    def set_creation_time(self, creation_time: datetime):
+        self._creation_time = creation_time
+
+    def get_creation_time(self) -> datetime:
+        if not self._creation_time:
+            raise ValueError("Snapshot has no creation time")
+        return self._creation_time

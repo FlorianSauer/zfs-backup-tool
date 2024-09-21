@@ -7,6 +7,7 @@ from ..Constants import (TARGET_STORAGE_SUBDIRECTORY, BACKUP_FILE_POSTFIX, EXPEC
                          CALCULATED_CHECKSUM_FILE_POSTFIX, INITIAL_SNAPSHOT_POSTFIX, SNAPSHOT_PREFIX_POSTFIX_SEPARATOR)
 from ..ShellCommand import ShellCommand, SshHost
 from ..ShellCommand.Base import CommandExecutionError
+from ..ShellCommand.ZfsCommands import ZfsCommandsError
 from ..Zfs import Snapshot, PoolList, DataSet
 
 
@@ -31,7 +32,7 @@ class BackupPlan(object):
 
     def verify_snapshots(self, verify_pools: Dict[Tuple[Optional[SshHost], str], PoolList],
                          remove_invalid: bool = False, target_path_prefix_filter: Optional[str] = None,
-                         zfs_path_prefix_filter: Optional[str] = None):
+                         zfs_path_prefix_filter: Optional[str] = None) -> Dict[Tuple[Optional[SshHost], str], PoolList]:
         # iters all snapshots, checks various things
         # - expected checksum file must exist beside the snapshot file
         # - if no expected checksum file exists, try to borrow it from another target if possible
@@ -54,7 +55,7 @@ class BackupPlan(object):
         # group target paths by host, used for the parallel writing of backups (tee command parameters)
         host_targetpaths_pools = self._group_target_paths_by_host(verify_pools)
 
-        verify_failed = False
+        invalid_host_pools = {host_target: PoolList() for host_target in verify_pools.keys()}
 
         # iterate over all hosts, group pools from different target paths together, to repair them in one go
         for host, targetpaths_pools in host_targetpaths_pools.items():
@@ -62,20 +63,31 @@ class BackupPlan(object):
             pool_target_paths = self._group_target_paths(targetpaths_pools)
 
             for target_paths, pools in pool_target_paths.items():
-                for snapshot in pools.iter_snapshots():
-                    print("Verifying snapshot: ", snapshot.zfs_path)
-                    if not self._verify_snapshot_on_target(snapshot, host, list(target_paths),
-                                                           remove_invalid=remove_invalid,
-                                                           force_recalculate=True):
-                        verify_failed = True
-        if verify_failed:
-            print("Aborting...")
-            sys.exit(1)
+                for dataset in pools.iter_datasets():
+                    invalid_datasets = {target_path: dataset.copy() for target_path in target_paths}
+                    print("Verifying dataset: ", dataset.zfs_path)
+                    for snapshot in dataset.iter_snapshots():
+                        print("Verifying snapshot: ", snapshot.zfs_path)
+                        invalid_targets = self._verify_snapshot_on_target(snapshot, host, list(target_paths),
+                                                                          remove_invalid=remove_invalid,
+                                                                          force_recalculate=True)
+                        if invalid_targets:
+                            for invalid_target in invalid_targets:
+                                invalid_datasets[invalid_target].add_snapshot(snapshot.view())
+
+                    for target_path, invalid_dataset in invalid_datasets.items():
+                        if invalid_dataset.has_snapshots():
+                            invalid_host_pools[(host, target_path)].add_dataset(invalid_dataset)
+
+        return invalid_host_pools
 
     def _checksum_verify_helper(self, target_paths: List[str], snapshot: Snapshot,
                                 expected_checksums: Dict[str, Optional[str]],
                                 calculated_checksums: Dict[str, Optional[str]]
                                 ) -> Dict[str, Tuple[Optional[str], Optional[str]]]:
+        """
+        Returns a dictionary with the target paths as keys and the expected and calculated checksums as values.
+        """
         mismatching_checksums = {}
         for target_path in target_paths:
             expected_checksum = expected_checksums[target_path]
@@ -98,13 +110,11 @@ class BackupPlan(object):
         return mismatching_checksums
 
     def _verify_snapshot_on_target(self, snapshot: Snapshot, host: Optional[SshHost], target_paths: List[str],
-                                   remove_invalid: bool = False, force_recalculate=False) -> bool:
+                                   remove_invalid: bool = False, force_recalculate=False) -> List[str]:
         """
         :return: True if all checksums match, False if at least one checksum mismatch was found
         """
         self.shell_command.set_remote_host(host)
-
-        force_fail = False
 
         # read the expected checksum from the expected checksum file
         expected_checksums: Dict[str, Optional[str]] = {}
@@ -121,7 +131,6 @@ class BackupPlan(object):
                 print("Expected checksum file missing for backup {}@{} on target {}".format(
                     snapshot.dataset_zfs_path, snapshot.snapshot_name, target_path))
                 print("Verification not possible.")
-                force_fail = True
                 expected_checksum = None
             if self.dry_run and expected_checksum:
                 expected_checksums[target_path] = "dry-run"
@@ -192,9 +201,7 @@ class BackupPlan(object):
                 else:
                     self.shell_command.target_remove_files(remove_files)
 
-        if force_fail:
-            return False
-        return len(mismatching_checksums) == 0
+        return list(mismatching_checksums.keys())
 
     def _write_snapshot_to_target(self, snapshot: Snapshot, host: Optional[SshHost], target_paths: Set[str],
                                   repair=True):
@@ -369,6 +376,11 @@ class BackupPlan(object):
                         print("all targets failed")
                         print("Aborting...")
                         sys.exit(1)
+                except ZfsCommandsError as e:
+                    print("Error: cannot restore snapshot {}: {}".format(snapshot.zfs_path, str(e)))
+                    print("Aborting...")
+                    sys.exit(1)
+
             print("Restored backup snapshot {} from target {}".format(
                 snapshot.zfs_path, target_path))
             break
@@ -437,7 +449,7 @@ class BackupPlan(object):
             pool_target_paths = self._group_target_paths(targetpaths_pools)
 
             for target_paths, pools in pool_target_paths.items():
-                print("writing snapshots to target paths: ", target_paths)
+                print("writing snapshots to target paths:", ", ".join(target_paths))
                 pools.print()
                 for snapshot in pools.iter_snapshots():
                     print("Repairing snapshot: ", snapshot.zfs_path)
@@ -447,21 +459,48 @@ class BackupPlan(object):
 
     def restore_snapshots(self, restore_snapshots: List[Tuple[Snapshot, List[Tuple[Optional[SshHost], str]]]],
                           replace_dataset: Optional[List[DataSet]] = None,
+                          conflicting_snapshots: Optional[List[DataSet]] = None,
                           restore_target: Optional[str] = None, inplace: bool = False, wipe_replacement: bool = False):
         if not inplace and restore_target is None:
             raise ValueError("Restore target must be specified if not restoring inplace.")
         if restore_target:
             assert not restore_target.startswith('/')
 
+        # we cannot recreate a pool, because this would need info about the disks and other pool related setup values
+        # we can only restore datasets and snapshots
+        # check if the restore_target is a dataset or a pool
+        if not inplace and restore_target:
+            restore_pool = restore_target.split('/', 1)[0]
+            if restore_pool not in self.shell_command.list_pools():
+                print("Restore targets pool '{}' does not exist.".format(restore_pool))
+                print("Cannot restore a whole pool, only datasets.")
+                print("Create a pool with the name '{}' first.".format(restore_pool))
+                print("Aborting...")
+                sys.exit(1)
+
         replace_dataset_names = {dataset.zfs_path for dataset in replace_dataset} if replace_dataset else set()
+        conflicting_dataset_names = {dataset.zfs_path: dataset for dataset in
+                                     conflicting_snapshots} if conflicting_snapshots else dict()
 
         for snapshot, sources in restore_snapshots:
             if inplace:
                 _restore_target = snapshot.dataset_zfs_path
+                shifted_snapshot = snapshot.view()
             else:
                 assert restore_target
                 _restore_target = os.path.join(restore_target, snapshot.dataset_zfs_path)
-            if snapshot.dataset_zfs_path in replace_dataset_names and snapshot.snapshot_name.endswith(
+                shifted_snapshot = snapshot.prefixed_view(restore_target)
+            if shifted_snapshot.dataset_zfs_path in conflicting_dataset_names:
+                # remove all conflicting snapshots on first dataset conflict
+                dataset = conflicting_dataset_names.pop(shifted_snapshot.dataset_zfs_path)
+                for conflicting_snapshot in dataset.iter_snapshots():
+                    print("Removing snapshot: ", conflicting_snapshot.zfs_path)
+                    if self.dry_run:
+                        print("Would have removed snapshot: ", conflicting_snapshot.zfs_path)
+                    else:
+                        self.shell_command.delete_snapshot(conflicting_snapshot.zfs_path)
+
+            if shifted_snapshot.dataset_zfs_path in replace_dataset_names and snapshot.snapshot_name.endswith(
                     SNAPSHOT_PREFIX_POSTFIX_SEPARATOR + INITIAL_SNAPSHOT_POSTFIX):
                 if wipe_replacement:
                     print("Replacing and wiping dataset '{}' after restore of snapshot '{}'".format(
@@ -498,11 +537,9 @@ class BackupPlan(object):
                     print("writing backup snapshot:", snapshot.zfs_path)
                     self._write_snapshot_to_target(snapshot, host, set(target_paths))
 
-    def clean_snapshots(self, local_pools: PoolList, zfs_path_filter: Optional[str] = None):
+    def clean_snapshots(self, local_pools: PoolList):
         # iterate over all snapshots and remove them from the target pool
         for snapshot in local_pools.iter_snapshots():
-            if zfs_path_filter and not snapshot.zfs_path.startswith(zfs_path_filter):
-                continue
             print("Removing snapshot: ", snapshot.zfs_path)
             if self.dry_run:
                 print("Would have removed snapshot: ", snapshot.zfs_path)
@@ -516,7 +553,7 @@ class BackupPlan(object):
             for snapshot in pools.iter_snapshots():
                 if zfs_path_filter and not snapshot.zfs_path.startswith(zfs_path_filter):
                     continue
-                print("Removing snapshot: ", snapshot.zfs_path)
+                print("Removing remote snapshot: ", snapshot.zfs_path)
                 snapshot_files = []
                 for filepostfix in (BACKUP_FILE_POSTFIX,
                                     BACKUP_FILE_POSTFIX + EXPECTED_CHECKSUM_FILE_POSTFIX,

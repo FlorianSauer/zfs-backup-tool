@@ -1,4 +1,4 @@
-from typing import Dict, List, Iterator, Iterable, Union
+from typing import Dict, List, Iterator, Iterable, Union, Optional
 
 from .Dataset import DataSet
 from .Dataset.Snapshot import Snapshot
@@ -76,7 +76,7 @@ class Pool(object):
             raise ZfsAddError("Dataset '{}' already added to the pool '{}'".format(dataset.zfs_path, self.pool_name))
         if dataset.pool_name != self.pool_name:
             raise ZfsAddError("Dataset '{}' must have the same pool name as the pool '{}'".format(dataset.zfs_path,
-                                                                                                 self.pool_name))
+                                                                                                  self.pool_name))
         self.datasets[dataset.zfs_path] = dataset
 
     def remove_dataset(self, dataset: DataSet):
@@ -222,7 +222,7 @@ class Pool(object):
             if not dataset.has_snapshots():
                 self.remove_dataset(dataset)
 
-    def filter_include_by_zfs_path_prefix(self, zfs_path_prefix: str) -> "Pool":
+    def filter_include_by_zfs_path_prefix(self, zfs_path_prefix: Optional[str]) -> "Pool":
         """
         Filter out all elements in the pool, which do not match the given zfs path prefix.
         """
@@ -230,8 +230,9 @@ class Pool(object):
 
         for dataset in self.datasets.values():
             # add @ to the zfs path prefix to match the full potential dataset zfs path
-            if (dataset.zfs_path + "@").startswith(zfs_path_prefix):
-                dataset_view = dataset.filter_include_by_zfs_path_prefix(zfs_path_prefix)
-                new_pool.add_dataset(dataset_view)
+            if zfs_path_prefix is not None and not (dataset.zfs_path + "@").startswith(zfs_path_prefix):
+                continue
+            dataset_view = dataset.filter_include_by_zfs_path_prefix(zfs_path_prefix)
+            new_pool.add_dataset(dataset_view)
 
         return new_pool
