@@ -1,4 +1,4 @@
-from typing import Dict, Iterator, List, Iterable, Optional, Tuple, Any
+from typing import Dict, Iterator, List, Iterable, Optional, Tuple
 
 from ZfsBackupTool.Constants import SNAPSHOT_PREFIX_POSTFIX_SEPARATOR, INITIAL_SNAPSHOT_POSTFIX
 from .Snapshot import Snapshot
@@ -205,11 +205,9 @@ class DataSet(object):
         """
         Parse a backup snapshot name into its components.
 
-        Args:
-            snapshot_name (str): The snapshot name to parse.
-
-        Returns:
-            Tuple[str, int]: A tuple containing the snapshot prefix and the snapshot sequence number.
+        :param snapshot_name: The snapshot name to parse.
+        :returns: A tuple containing the snapshot prefix and the snapshot sequence number.
+        :raises ZfsParseError: If the snapshot name is invalid.
         """
         if SNAPSHOT_PREFIX_POSTFIX_SEPARATOR not in snapshot_name:
             raise ZfsParseError("Invalid snapshot name: {}".format(snapshot_name))
@@ -311,28 +309,27 @@ class DataSet(object):
         Build incremental snapshot references for all snapshots.
         """
         sorted_snapshots = self.sort_snapshots(self.snapshots.values())
-        snapshot_prefixes = set()
+        found_prefixes = set()
         for snapshot in sorted_snapshots:
-            snapshot_prefix = snapshot.snapshot_name.rsplit(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR, 1)[0]
-            snapshot_prefixes.add(snapshot_prefix)
+            try:
+                snapshot_prefix, _ = self.parse_backup_snapshot(snapshot.snapshot_name)
+            except ZfsParseError:
+                continue
+            found_prefixes.add(snapshot_prefix)
 
-        for snapshot_prefix in snapshot_prefixes:
+        for found_prefix in found_prefixes:
             incremental_base = None
             for index, snapshot in enumerate(sorted_snapshots):
-                if snapshot.snapshot_name.startswith(snapshot_prefix + SNAPSHOT_PREFIX_POSTFIX_SEPARATOR):
+                try:
+                    snapshot_prefix, snapshot_index = self.parse_backup_snapshot(snapshot.snapshot_name)
+                except ZfsParseError:
+                    continue
+                if snapshot_prefix == found_prefix:
                     if incremental_base:
                         # verify incremental base +1 is equal to our current snapshot index
-                        if incremental_base.snapshot_name.endswith(
-                                SNAPSHOT_PREFIX_POSTFIX_SEPARATOR + INITIAL_SNAPSHOT_POSTFIX):
-                            incremental_base_index = 0
-                        else:
-                            incremental_base_index = int(
-                                incremental_base.snapshot_name.split(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR)[-1])
-                        snapshot_index = int(
-                            snapshot.snapshot_name.split(SNAPSHOT_PREFIX_POSTFIX_SEPARATOR)[-1])
+                        _, incremental_base_index = self.parse_backup_snapshot(incremental_base.snapshot_name)
                         if incremental_base_index + 1 != snapshot_index:
                             continue
-
                         snapshot.set_incremental_base(incremental_base)
                     incremental_base = snapshot
 
