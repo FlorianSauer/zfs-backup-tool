@@ -239,6 +239,9 @@ class PoolList(object):
         return any(pool.has_datasets() for pool in self.pools.values())
 
     def get_dataset_by_path(self, zfs_path: str):
+        """
+        : raises ZfsResolveError: If the pool name is not found in the pool list.
+        """
         pool_name, dataset_name = zfs_path.split("/", 1)
         dataset_name = "{}/{}".format(pool_name, dataset_name.split("@", 1)[0])
         if pool_name not in self.pools:

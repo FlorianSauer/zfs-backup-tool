@@ -5,7 +5,7 @@ from humanfriendly import parse_size, format_size
 
 from ZfsBackupTool.ResourcePacker import ResourcePacker, PackingError
 from ZfsBackupTool.ShellCommand import ShellCommand
-from ZfsBackupTool.Zfs import scan_zfs_pools, PoolList
+from ZfsBackupTool.Zfs import scan_zfs_pools, PoolList, ZfsResolveError
 
 
 class BackupGroupPlanner(object):
@@ -69,6 +69,12 @@ class BackupGroupPlanner(object):
                 dataset = dataset[:-1]
                 dataset = dataset[:-1] if dataset.endswith("/") else dataset
                 source_datasets.append(available_pools.filter_include_by_zfs_path_prefix(dataset))
+            elif dataset.endswith("/"):
+                dataset = dataset[:-1]
+                try:
+                    source_datasets.append(available_pools.get_dataset_by_path(dataset))
+                except ZfsResolveError:
+                    print("Dataset '{}' not found".format(dataset))
             else:
                 source_datasets.append(available_pools.filter_include_by_zfs_path_prefix(dataset))
 
