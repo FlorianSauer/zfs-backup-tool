@@ -271,6 +271,14 @@ class PoolList(object):
         for pool in self.pools.values():
             pool.drop_empty_datasets()
 
+    def drop_empty_pools(self) -> None:
+        """
+        Drop all pools that have no datasets from this PoolList.
+        """
+        empty_pools = [pool for pool in self.pools.values() if not pool.has_datasets()]
+        for pool in empty_pools:
+            self.remove_pool(pool)
+
     def filter_include_by_zfs_path_prefix(self, zfs_path_prefix: Optional[str]) -> "PoolList":
         """
         Filter out all elements in the pool, which do not match the given zfs path prefix.

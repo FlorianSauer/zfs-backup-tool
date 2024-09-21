@@ -73,6 +73,9 @@ class BackupSetup(object):
                             dataset_view.remove_snapshot(snapshot_view)
                             continue
 
+            # drop empty pools
+            pools_view.drop_empty_pools()
+
         return source_pool_view_mapping
 
     def filter_by_prefix(self, pools: PoolList) -> PoolList:
