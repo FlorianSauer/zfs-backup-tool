@@ -139,8 +139,8 @@ class ZfsBackupTool(object):
         self.config = self._load_config(self.cli_args.config)
         self.backup_plan = BackupPlan(self.shell_command,
                                       include_intermediate_snapshots=self.config.include_intermediate_snapshots,
-                                      dry_run=self.cli_args.dry_run
-                                      )
+                                      dry_run=self.cli_args.dry_run,
+                                      debug=self.cli_args.debug)
 
         try:
             # self.do_check_programs_installed()
@@ -365,11 +365,13 @@ class ZfsBackupTool(object):
 
         # region create new snapshots as bulk operation
 
+        selected_backup_pools = PoolList.merge(*backup_source_configured_pools_mapping.values()
+                                               ).filter_include_by_zfs_path_prefix(self.cli_args.filter)
+
         # merge all source pools to one view, so new snapshots can be made for all datasets at once
         # create a view, which contains all new needed backup snapshots
-        backup_snapshots = make_next_backup_view(PoolList.merge(*backup_source_configured_pools_mapping.values()),
+        backup_snapshots = make_next_backup_view(selected_backup_pools,
                                                  self.config.snapshot_prefix,
-                                                 zfs_path_filter=self.cli_args.filter,
                                                  skip_view=PoolList.merge(*repair_pools.values()))
 
         # also verify, that each dataset has a now at least the initial snapshot

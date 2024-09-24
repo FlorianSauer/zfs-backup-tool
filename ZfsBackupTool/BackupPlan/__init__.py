@@ -15,12 +15,12 @@ class BackupPlan(object):
     def __init__(self, shell_command: ShellCommand,
                  include_intermediate_snapshots: bool = False,
                  dry_run: bool = False,
-                 # snapshot_prefix: str
+                 debug: bool = False,
                  ):
         self.shell_command = shell_command
         self.include_intermediate_snapshots = include_intermediate_snapshots
         self.dry_run = dry_run
-        # self.snapshot_prefix = snapshot_prefix
+        self.debug = debug
 
     def create_snapshots(self, pools: PoolList):
         for snapshot in pools.iter_snapshots():
@@ -472,7 +472,7 @@ class BackupPlan(object):
 
             for target_paths, pools in pool_target_paths.items():
                 print("writing snapshots to target paths:", ", ".join(target_paths))
-                pools.print()
+                pools.print(with_incremental_base=self.debug)
                 for snapshot in pools.iter_snapshots():
                     print("Repairing snapshot: ", snapshot.zfs_path)
                     self._write_snapshot_to_target(snapshot, host, set(target_paths))
@@ -554,7 +554,7 @@ class BackupPlan(object):
 
             for target_paths, pools in pool_target_paths.items():
                 print("writing snapshots to target paths:", ", ".join(target_paths))
-                pools.print()
+                pools.print(with_incremental_base=self.debug)
                 for snapshot in pools.iter_snapshots():
                     print("writing backup snapshot:", snapshot.zfs_path)
                     self._write_snapshot_to_target(snapshot, host, set(target_paths))

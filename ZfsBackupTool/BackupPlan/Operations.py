@@ -46,7 +46,6 @@ def get_next_backup_snapshot_for_dataset(dataset: DataSet, snapshot_prefix: str)
 
 
 def make_next_backup_view(pools: PoolList, snapshot_prefix: str,
-                          zfs_path_filter: Optional[str] = None,
                           skip_view: Optional[PoolList] = None) -> PoolList:
     """
     Create a new Pool view with the next needed snapshots.
@@ -56,10 +55,6 @@ def make_next_backup_view(pools: PoolList, snapshot_prefix: str,
     backup_view.drop_snapshots()
     for dataset in pools.iter_datasets():
         backup_snapshot = get_next_backup_snapshot_for_dataset(dataset, snapshot_prefix)
-        if zfs_path_filter and not backup_snapshot.zfs_path.startswith(zfs_path_filter):
-            # we need to skip the snapshot which does not match the filter
-            print("Skipping next backup snapshot for dataset: {}".format(backup_snapshot.dataset_zfs_path))
-            continue
         if skip_view:
             # check if the snapshots dataset exists in the skip view and has snapshots
             try:
