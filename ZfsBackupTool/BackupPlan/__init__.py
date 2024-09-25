@@ -179,9 +179,14 @@ class BackupPlan(object):
                     calculated_checksum_file_path = os.path.join(
                         target_path, TARGET_STORAGE_SUBDIRECTORY, snapshot.dataset_zfs_path,
                         snapshot.snapshot_name + BACKUP_FILE_POSTFIX + CALCULATED_CHECKSUM_FILE_POSTFIX)
-                    self.shell_command.target_write_to_file(
-                        calculated_checksum_file_path,
-                        "{} ./{}".format(calculated_checksum, snapshot.snapshot_name + BACKUP_FILE_POSTFIX))
+                    try:
+                        self.shell_command.target_write_to_file(
+                            calculated_checksum_file_path,
+                            "{} ./{}".format(calculated_checksum, snapshot.snapshot_name + BACKUP_FILE_POSTFIX))
+                    except CommandExecutionError as e:
+                        print("Error writing calculated checksum to file {}: {}".format(
+                            calculated_checksum_file_path, e))
+                        continue
             for target_path, calculated_checksum in re_calculated_checksums.items():
                 if calculated_checksums[target_path]:
                     raise RuntimeError("Calculated checksum already exists for backup {}@{} on target {}".format(
