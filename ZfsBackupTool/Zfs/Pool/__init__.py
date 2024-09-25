@@ -228,7 +228,7 @@ class Pool(object):
         """
         new_pool = self.copy()
 
-        for dataset in self.datasets.values():
+        for dataset in self.iter_datasets():
             # add @ to the zfs path prefix to match the full potential dataset zfs path
             if zfs_path_prefix is not None and not (dataset.zfs_path + "@").startswith(zfs_path_prefix):
                 continue
