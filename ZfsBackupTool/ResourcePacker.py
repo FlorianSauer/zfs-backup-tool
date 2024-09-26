@@ -1,8 +1,6 @@
 import sys
 from collections import OrderedDict
-from typing import Iterable, List, Dict
-
-from ZfsBackupTool.Zfs import DataSet
+from typing import Iterable, List, Dict, Tuple
 
 
 class ResourcePacker(object):
@@ -13,12 +11,12 @@ class ResourcePacker(object):
         # type: (int) -> None
         self.packing_method = packing_method
 
-    def getFragmentPackets(self, resource_size: int, fragments: Iterable[DataSet], allow_oversized: bool = False
-                           ) -> List[Dict[DataSet, int]]:
+    def getFragmentPackets(self, resource_size: int, fragments: Dict[str, int], allow_oversized: bool = False
+                           ) -> List[Dict[str, int]]:
         if self.packing_method == self.BIN_PACKING:
-            packets = self._get_binpacked_resources(resource_size, fragments)
+            packets = self._get_binpacked_resources(resource_size, fragments.items())
         elif self.packing_method == self.FILLING:
-            packets = self._get_sequential_filled_resources(resource_size, fragments)
+            packets = self._get_sequential_filled_resources(resource_size, fragments.items())
         else:
             raise NotImplementedError
         if not allow_oversized and any(sum(packet.values()) > resource_size for packet in packets):
@@ -27,36 +25,21 @@ class ResourcePacker(object):
                                    resource_size))
         return sorted(packets, key=lambda packet: sum(packet.values()), reverse=True)
 
-    def checkPackagesReachMinimumFillLevel(self, packets, resource_size, minimum_fill_level):
-        # type: (List[Dict[DataSet, int]], int, float) -> bool
-        if minimum_fill_level > 1.0:
-            raise ValueError("fill level greater than 100% | 1.0")
-        if len(packets) == 2 and len(packets[1]) == 1 and (
-                sum(packets[0].values()) + sum(packets[1].values()) > resource_size
-                and
-                sum(packets[0].values()) / resource_size < minimum_fill_level
-        ):
-            # edge case where fragment cache was pushed over the resource_size limit with the last fragment (in
-            # packets[1]), however the other previous fragments combined can not reach the desired minimum_fill_level
-            # occurrs with FILLING-mode
-            return True
-        return any(sum(packet.values()) / resource_size >= minimum_fill_level for packet in packets)
-
     def _get_binpacked_resources(self, resource_size, fragments):
-        # type: (int, Iterable[DataSet]) -> List[Dict[DataSet, int]]
+        # type: (int, Iterable[Tuple[str, int]]) -> List[Dict[str, int]]
         try:
             import binpacking
         except ImportError:
             print("Please install the 'binpacking' package to use the BIN_PACKING packing method.")
             sys.exit(1)
-        return binpacking.to_constant_volume({f: f.dataset_size for f in fragments}, resource_size,
+        return binpacking.to_constant_volume({fn: fs for fn, fs in fragments}, resource_size,
                                              upper_bound=resource_size + 1)
 
     def _get_sequential_filled_resources(self, resource_size, fragments):
-        # type: (int, Iterable[DataSet]) -> List[Dict[DataSet, int]]
-        datasets_sizes = {f: f.dataset_size for f in fragments}
+        # type: (int, Iterable[Tuple[str, int]]) -> List[Dict[str, int]]
+        datasets_sizes = {fn: fs for fn, fs in fragments}
 
-        buckets: List[OrderedDict[DataSet, int]] = []
+        buckets: List[Dict[str, int]] = []
         while datasets_sizes:
             # try to fill existing buckets
             for bucket in buckets:

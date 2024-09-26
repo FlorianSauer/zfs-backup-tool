@@ -229,7 +229,7 @@ class Pool(object):
         new_pool = self.copy()
 
         for dataset in self.iter_datasets():
-            # add @ to the zfs path prefix to match the full potential dataset zfs path
+            # add @ to the zfs path prefix to match the full potential dataset zfs path for snapshots
             if zfs_path_prefix is not None and not (dataset.zfs_path + "@").startswith(zfs_path_prefix):
                 continue
             dataset_view = dataset.filter_include_by_zfs_path_prefix(zfs_path_prefix)

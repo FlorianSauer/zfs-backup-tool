@@ -143,6 +143,9 @@ class ZfsBackupTool(object):
                                       debug=self.cli_args.debug)
 
         try:
+            # Todo: add a remote clean function. when the config file changes and some datasets are not included anymore,
+            #  the old datasets are still present on the remote side. we should clean them up but keep the still
+            #  configured datasets.
             # self.do_check_programs_installed()
             if self.cli_args.subparser_name is None:
                 self.cli_parser.print_help()
@@ -425,9 +428,6 @@ class ZfsBackupTool(object):
         print("Backup done.")
 
     def do_restore(self):
-        # if self.cli_args.incremental and self.cli_args.replace:
-        #     print("Options --incremental and --replace are mutually exclusive")
-        #     sys.exit(1)
         if self.cli_args.restore_path.startswith('/'):
             print("Zfs path must not start with /")
             sys.exit(1)
