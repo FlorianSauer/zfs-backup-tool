@@ -198,7 +198,7 @@ class BackupGroupPlanner(object):
                         f.write("\n")
 
             remaining_dataset_size = sum([dataset.dataset_size for dataset in datasets.iter_datasets()])
-            if remaining_dataset_size + usage_size < disk_size:
+            if remaining_dataset_size + usage_size < (disk_size - (disk_size * disk_free_percentage)):
                 for dataset in datasets.iter_datasets():
                     size = dataset.dataset_size
                     print("  {}: {}".format(dataset.zfs_path, size))
