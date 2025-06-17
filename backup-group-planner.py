@@ -40,7 +40,8 @@ class BackupGroupPlanner(object):
     # add positional argument to specify multiple source datasets
     cli_parser.add_argument("source_datasets", nargs="+",
                             help="Source datasets to plan backup groups for. Given strings are used as prefixes. "
-                                 "To select a single dataset, use a trailing '/'.")
+                                 "To select a single dataset, use a trailing '/'. "
+                                 "To exclude a dataset prefix the string with a '!'.")
 
     def __init__(self):
         self.cli_args: argparse.Namespace = None  # type: ignore
@@ -68,8 +69,11 @@ class BackupGroupPlanner(object):
 
     def filter_datasets(self, datasets_to_filter: PoolList, filters: List[str]) -> PoolList:
         filtered_datasets = PoolList()
+        excludes_filters = []
         for dataset_filter in filters:
-            if dataset_filter.endswith("*"):
+            if dataset_filter.startswith("!"):
+               excludes_filters.append(dataset_filter[1:])
+            elif dataset_filter.endswith("*"):
                 dataset_filter = dataset_filter[:-1]
                 dataset_filter = dataset_filter[:-1] if dataset_filter.endswith("/") else dataset_filter
                 filtered_datasets = PoolList.merge(filtered_datasets,
@@ -87,6 +91,11 @@ class BackupGroupPlanner(object):
             else:
                 filtered_datasets = PoolList.merge(filtered_datasets,
                                                    datasets_to_filter.filter_include_by_zfs_path_prefix(dataset_filter))
+
+        for exclude_filter in excludes_filters:
+            excluded_datasets = filtered_datasets.filter_include_by_zfs_path_prefix(exclude_filter)
+            filtered_datasets = filtered_datasets.difference(excluded_datasets)
+
         return filtered_datasets
 
     def run(self):
