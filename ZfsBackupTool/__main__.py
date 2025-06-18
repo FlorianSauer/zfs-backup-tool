@@ -651,6 +651,9 @@ class ZfsBackupTool(object):
                 wipe_replacement=self.cli_args.wipe)
 
         print("Restore done.")
+        print("You might have to re-adjust the encryptionroot properties with:")
+        print("  zfs set encryptionroot=<parent_dataset> <child_dataset>")
+        print()
 
     def do_verify(self):
         # scan local zfs setup
