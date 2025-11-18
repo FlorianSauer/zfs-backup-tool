@@ -133,6 +133,8 @@ class FsCommands(BaseShellCommand):
             print("Program '{}' not installed".format(program), file=sys.stderr)
             stderr_data = e.sub_process.stderr.read().decode('utf-8') if e.sub_process.stderr else ""
             print(stderr_data, file=sys.stderr)
+            print()
+            print("!!! ABORTING !!!")
             sys.exit(1)
         else:
             if verbose:
